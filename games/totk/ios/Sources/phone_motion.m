@@ -48,6 +48,8 @@ static _Atomic int active;                                        /* the sensor 
 static _Atomic int orientation = DEVICE_MOTION_UI_LANDSCAPE_RIGHT;   /* read on the sensor's queue */
 static _Atomic uint64_t samples;
 static _Atomic int sampleErrorLogged;
+static __weak UIView *motionBody;
+static _Atomic int bodyFrame;
 /* Which motion source owns the game's single six-axis sensor (see the file comment). Read on the sensor's queue. */
 static _Atomic int controller_has_motion;                         /* a connected controller reports a gyro */
 static _Atomic int phone_owns_gyro;                               /* touch took the aiming away from it */
@@ -62,11 +64,17 @@ static void set_controller_sensors(BOOL on) {   /* main thread */
 }
 static void follow_owner(void);
 static void claim_phone_gyro(void) {   /* main thread */
+#ifdef GAME_BOTW190
+    follow_owner();return;
+#endif
     if (!atomic_exchange(&phone_owns_gyro, 1)) fprintf(stderr, "[gyro] the screen was touched: the phone's gyro aims now\n");
     set_controller_sensors(NO);
     follow_owner();
 }
 static void claim_pad_gyro(void) {   /* main thread */
+#ifdef GAME_BOTW190
+    follow_owner();return;
+#endif
     if (atomic_exchange(&phone_owns_gyro, 0)) fprintf(stderr, "[gyro] the gamepad is used: its own gyro aims again\n");
     set_controller_sensors(YES);
     follow_owner();   /* dropping the phone's flag drops its last samples at once */
@@ -128,6 +136,10 @@ static BOOL start_updates(void) {
         return NO;
     }
     if (sensing) return YES;
+    atomic_store(&bodyFrame,0);
+#if defined(__IPHONE_27_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_0
+    if (@available(iOS 27.0,*)) { manager.deviceMotionBody=motionBody;atomic_store(&bodyFrame,motionBody!=nil); }
+#endif
     manager.deviceMotionUpdateInterval = 1.0 / 60.0;
     [manager startDeviceMotionUpdatesUsingReferenceFrame:CMAttitudeReferenceFrameXArbitraryZVertical toQueue:queue
                                             withHandler:^(CMDeviceMotion *motion, NSError *error) {
@@ -137,13 +149,15 @@ static BOOL start_updates(void) {
             return;
         }
         if (!motion) return;
+#ifndef GAME_BOTW190
         if (atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro))
             return;   /* the controller's gyro took the aiming between this sample and the sensor's stop */
+#endif
         const double deviceAcc[3] = {motion.gravity.x + motion.userAcceleration.x,
                                      motion.gravity.y + motion.userAcceleration.y,
                                      motion.gravity.z + motion.userAcceleration.z};
         const double deviceGyro[3] = {motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z};
-        double acc[3], gyro[3]; const int o = atomic_load(&orientation);
+        double acc[3], gyro[3]; const int o = atomic_load(&bodyFrame) ? DEVICE_MOTION_UI_PORTRAIT : atomic_load(&orientation);
         device_motion_to_landscape(o, deviceAcc, acc);
         device_motion_to_landscape(o, deviceGyro, gyro);
         uint64_t n = atomic_fetch_add(&samples, 1);
@@ -151,7 +165,7 @@ static BOOL start_updates(void) {
             fprintf(stderr, "[phone-gyro] first sample: acc %+.2f %+.2f %+.2f G, gyro %+.1f %+.1f %+.1f deg/s (%s)\n",
                     acc[0], acc[1], acc[2], gyro[0] * 180 / M_PI, gyro[1] * 180 / M_PI, gyro[2] * 180 / M_PI,
                     o == DEVICE_MOTION_UI_LANDSCAPE_LEFT ? "landscape left" : "landscape right");
-        runtime_motion_feed(acc, gyro, runtime_now_ns());
+        runtime_motion_feed_device(acc, gyro, runtime_now_ns());
     }];
     /* isDeviceMotionActive can still be false right after the call; the handler above is already scheduled. */
     sensing = YES;
@@ -165,6 +179,14 @@ static void stop_updates(void) {
 
 /* The phone's sensor and the input watch follow the owner of the aiming (main thread, while the app is active). */
 static void follow_owner(void) {
+#ifdef GAME_BOTW190
+    const char *source=dm_motion_source_get();watch_gamepad(NO);
+    BOOL device=!strcmp(source,"auto") || !strcmp(source,"device");
+    set_controller_sensors(strcmp(source,"off") && strcmp(source,"device"));
+    if(!atomic_load(&active) || !device) {stop_updates();runtime_motion_phone(0);return;}
+    if(!sensing && start_updates())runtime_motion_phone(1);
+    return;
+#endif
     if (!atomic_load(&active)) { watch_gamepad(NO); return; }
     BOOL pad = atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro);
     watch_gamepad(atomic_load(&controller_has_motion) && atomic_load(&phone_owns_gyro));
@@ -222,7 +244,11 @@ static void orientation_changed(void) {
 void totk_phone_motion_start(void) {
     if (started) return;
     started = YES;
+#ifdef GAME_BOTW190
+    enabled=runtime_gyro_enabled();
+#else
     enabled = totk_phone_setting_enabled(@"TOTK_PHONE_GYRO") && runtime_gyro_enabled();
+#endif
     if (!enabled) {
         fprintf(stderr, "[phone-gyro] off (phone setting or gyro disabled)\n");
         return;
@@ -250,10 +276,26 @@ void totk_phone_motion_start(void) {
         update_active();
     });
 }
+void totk_device_motion_bind_view(UIView *view) {
+    if(motionBody==view)return;
+    BOOL was=sensing;if(was)stop_updates();motionBody=view;
+    if(was)follow_owner();
+}
+void totk_device_motion_geometry_changed(UIInterfaceOrientation value) {
+    if(value<UIInterfaceOrientationPortrait || value>UIInterfaceOrientationLandscapeLeft || value==atomic_load(&orientation))return;
+    BOOL was=atomic_load(&active);if(was)phone_stop("the touch surface orientation changed");
+    atomic_store(&orientation,(int)value);if(was)phone_start();
+}
 
 #else
 
 void totk_phone_motion_start(void) {}
 void totk_device_motion_note_touch(void) {}
+void totk_device_motion_bind_view(UIView *view) { (void)view; }
+void totk_device_motion_geometry_changed(UIInterfaceOrientation value) { (void)value; }
 
+#endif
+
+#ifdef GAME_BOTW190
+void totk_phone_motion_source_changed(void) {dispatch_async(dispatch_get_main_queue(),^{if(started && enabled)follow_owner();});}
 #endif

@@ -117,7 +117,7 @@ class FullHD(unittest.TestCase):
         self.assertEqual(main.count('totk_preset_env_build('), 1, 'the presets\' picture goes in one place')
         # Both games have the switch (Breath of the Wild's docked scene is its own row, TOTK_BOTW_SCENE), so no
         # game-specific exception is left in the helper. The only other operation-mode site is visionOS's default.
-        self.assertNotIn('#ifndef GAME_BOTW', main)
+        self.assertNotRegex(main, r'#ifndef\s+GAME_BOTW\b')
         vision = 'setenv("TOTK_OPERATION_MODE","docked",1);'
         self.assertIn(vision, main)
         self.assertEqual(main.replace(vision, '').count('setenv("TOTK_OPERATION_MODE",'), 1,

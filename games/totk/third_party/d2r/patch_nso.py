@@ -166,8 +166,239 @@ OBS = {'db0507f36b84200ac05f75d76ed5026f': [
      'DM_C2S_LOG 记为 "q":"sys"；原指令 stp x28, x25, [sp, #-0x50]!'),
     (0x317298, 5, 'd10183ff', 'SetLanguage 入口（x1 → u32 新语言号，语言名表 main+0x20ae478）：配合上方语言重载剪口，宿主断言新语言为 zhCN；'
      '原指令 sub sp, sp, #0x60'),
-]}
+],
+'cd57b23fa4bbad65803d9788c01821ee': [
+    (0x276a0, 34, 'd10243ff', 'Pane::Calculate entry: locate N_MainAll_00 and mark its global matrix dirty on touch HUD changes'),
+    (0x27ae4, 35, '52800036', 'Pane::Calculate after global matrix composition and before child recursion: offset N_MainAll_00 translation'),
+    (0x27d7c, 39, 'f9405908', 'Pane::Draw before virtual DrawSelf: x21 owns the native background pane'),
+    (0x27d84, 40, '394162a8', 'Pane::Draw after virtual DrawSelf: end the native background draw scope'),
+    (0xf714b8, 41, 'f9400008', 'ScreenMgr draw dispatch: result filter moves the collapsed touch map before foreground screens in its layer'),
+    (0xeb4468, 29, 'a9be7bfd', 'projection update: apply the display aspect to the main camera before checking dirty flags'),
+    (0xd44a2c, 30, 'a94a2269', 'UI 3D camera update: x19 owns the source lens at +0xa0 and projection at +0xa8; apply aspect before copying lens parameters'),
+    (0xe1a628, 31, 'f960de68', 'MainScreen3D update: correct its copied projection before rebuilding the world-label view'),
+    (0xd58008, 33, 'f9409408', 'shared stick getter: snapshot the selected raw child pair before the native dead-zone/filter branches'),
+    (0xd5801c, 32, 'fd400be8', 'shared normalized stick getter: inject one frame of relative input after native filtering and before return'),
+    (0xbf0c4c, 42, 'bd436261', 'CameraAiming common pitch target: add touch after gyro, before native clamp and smoothing'),
+    (0xbf2ccc, 42 | 1 << 8, '394e2268', 'CameraAiming2 pitch target: add touch after gyro, before native smoothing'),
+    (0xbf0e34, 43, '1e2f190a', 'CameraAiming final yaw: shift both native target and smoothed output by touch displacement'),
+    (0xbf2f90, 43 | 1 << 8, 'aa1303e0', 'CameraAiming2 final yaw: shift native target and output after gyro'),
+    (0xf57ba0, 37, 'd10143ff', 'BoxCursorControl update entry: x0 is the native manager; observe focused/requested item before native validation and focus callbacks'),
+    (0xf57a08, 37, 'f9400bf3', 'BoxCursorControl constructor exit: x0 is the initialized manager, including first boot without a Title cursor update'),
+    (0xd6f034, 38, 'd101c3ff', 'native list-widget update entry: x0 is the shared list widget; cache receiver metadata only'),
+  ],
+}
+# BOTW touch-only guards copied from nxnative 81880286, dm/games/01007EF00011E000/patches.py (MIT).
+# No old frame-step, rendering-performance cuts or cache code are included.
+def validate_botw_touch_main(ctx):
+    word = lambda off: struct.unpack_from('<I', ctx.image, off)[0]
+    assert tuple(word(o) for o in range(0xf71490, 0xf714d8, 4)) == (
+        0x12001c39, 0x3877cb08, 0x6b19011f, 0x54000141, 0xb9402a88, 0xaa1303e1,
+        0x6b16011f, 0xf9401a89, 0x1a9f82c8, 0xf868d920, 0xf9400008, 0xf9402d08,
+        0xd63f0100, 0x910006e8, 0x110006d6, 0x92407d17, 0x6b0802bf, 0x54fffe01,
+    ), 'BOTW ScreenMgr draw loop changed; revalidate OBS41 receiver and layer/index registers'
+    assert tuple(word(o) for o in range(0xe1a61c, 0xe1a62c, 4)) == (
+        0x97fd1459, 0x97fd1470, 0xb40002c0, 0xf960de68,
+    ), 'BOTW MainScreen3D camera copy / successful-result branch changed'
+    assert tuple(word(o) for o in range(0xe1a628, 0xe1a674, 4)) == (
+        0xf960de68, 0xb4000288, 0xbd401000, 0x52885008, 0x8b080268, 0xbd400801,
+        0x1e213800, 0x1e2c1001, 0x1e210800, 0xbd000100, 0xbd401400, 0xbd400c02,
+        0x1e223800, 0x1e210803, 0xbd000503, 0xb0007fc8, 0x913b4108, 0xf9400100,
+        0xb4000060,
+    ), 'BOTW MainScreen3D post-copy point or x19 owner liveness changed'
+    assert tuple(word(o) for o in range(0xe1a67c, 0xe1a688, 4)) == (
+        0xa9414ff4, 0xa8c27bfd, 0xd65f03c0,
+    ), 'BOTW MainScreen3D early return scratch-register liveness changed'
+    assert tuple(word(o) for o in range(0xd58008, 0xd58018, 4)) == (
+        0xf9409408, 0x910023e0, 0xf90007e8, 0x941fbe5f,
+    ), 'BOTW raw stick source sequence changed; recheck OBS33 child pointer and raw pair location'
+    assert tuple(word(o) for o in range(0xd5801c, 0xd58030, 4)) == (
+        0xfd400be8, 0xf94017f3, 0xa941fbfd, 0x9100c3ff, 0xd65f03c0,
+    ), 'BOTW shared getter epilogue changed; recheck OBS32 scratch-register liveness'
+    # Experimental composition preserves gyro selection. Pitch gates change only saved s0
+    # and a persistent smoothing base; yaw gates change memory, never saved registers.
+    # At each site x9-x17 remain unread through the next native call on every path.
+    assert tuple(word(o) for o in range(0xbf0c4c, 0xbf0c7c, 4)) == (
+        0xbd436261, 0x1e2a390a, 0xbd024669, 0x1e212000, 0x540000c4, 0xbd436662,
+        0x1e204001, 0x1e222000, 0x5400004d, 0x1e204041, 0x1e204020, 0x940595ab,
+    ), 'CameraAiming common pitch target/clamp changed'
+    assert tuple(word(o) for o in range(0xbf2ccc, 0xbf2ce8, 4)) == (
+        0x394e2268, 0xbd023660, 0x1e2c1000, 0xaa1503e0, 0x7100051f, 0x1e2a0c00, 0x9400df15,
+    ), 'CameraAiming2 pitch target/smoothing changed'
+    assert tuple(word(o) for o in range(0xbf0e34, 0xbf0ea8, 4)) == (
+        0x1e2f190a, 0x394da668, 0x7100051f, 0x54000280, 0x91054277, 0x2a1f03e1,
+        0xb9023e7f, 0xaa1703e0, 0x94059cbf, 0x2a1f03f8, 0x37000160, 0xaa1703e0,
+        0x52800021, 0x52800038, 0x94059cb9, 0x370000c0, 0xaa1703e0, 0x52800041,
+        0x52800058, 0x94059cb4, 0x36000040, 0xb9023e78, 0xb902427f, 0x910083e1,
+        0xaa1303e0, 0xbd02aa69, 0x91218297, 0xb90023ff, 0x940000d8,
+    ), 'CameraAiming final yaw join or scratch-register liveness changed'
+    assert tuple(word(o) for o in range(0xbf2f90, 0xbf2f9c, 4)) == (
+        0xaa1303e0, 0xbd02826a, 0x9400016e,
+    ), 'CameraAiming2 final yaw join changed'
+    # Pane::Draw saves this in x21 and invokes DrawSelf at vtable +0xb0.
+    # The begin gate precedes that call with x9-x17 dead; the end gate follows it.
+    assert tuple(word(o) for o in range(0x27d50, 0x27d8c, 4)) == (
+        0x3941700a, 0xaa0203f3, 0xaa0103f4, 0x39416809, 0xaa0003f5,
+        0x3620014a, 0x34000129, 0xf94002a8, 0xaa1503e0, 0xaa1403e1,
+        0xaa1303e2, 0xf9405908, 0xd63f0100, 0x394162a8, 0x39416aa9,
+    ), 'BOTW Pane::DrawSelf scope changed; revalidate OBS39/40 and x21 pane owner'
+    assert tuple(word(o) for o in range(0x276a0, 0x276d8, 4)) == (
+        0xd10243ff, 0xfd0023e8, 0xf9002ff9, 0xa904fbfd, 0xa9065ff8, 0xa90757f6,
+        0xa9084ff4, 0x910123fd, 0x39416008, 0xaa0003f3, 0x12000109, 0x3940744a,
+        0x2a0a0129, 0x72001d3f,
+    ), 'BOTW Pane::Calculate entry changed; recheck OBS34 pane and dirty-flag semantics'
+    assert tuple(word(o) for o in range(0x27ae0, 0x27aec, 4)) == (
+        0x39416268, 0x52800036, 0x360805a8,
+    ), 'BOTW Pane::Calculate post-matrix point changed; recheck OBS35 x19 pane and translation lanes'
+    # OBS35 is interior, so its stub may use x9-x17. Both its direct exit and
+    # the child-recursion path below use x8 and x19-x25 until the first blr;
+    # keep the verified tail bytes here as its register-liveness proof.
+    assert tuple(word(o) for o in range(0x27ae8, 0x27bd0, 4)) == (
+        0x360805a8, 0x39416668, 0x7103fd1f, 0x54000540, 0x1e230100, 0x52901028,
+        0x72a77008, 0xbd401a88, 0x91008279, 0x1e270101, 0x52800028, 0x1e200900,
+        0x39407e98, 0x39007e88, 0x1e210803, 0xbd001a83, 0xf9401677, 0xeb1902ff,
+        0x54000160, 0xf85f8ee8, 0xaa1503e1, 0xaa1703e0, 0xaa1403e2, 0xf9405108,
+        0x2a1603e3, 0xd63f0100, 0xf9400af7, 0xeb1902ff, 0x54fffee1, 0xbd001a88,
+        0x39007e98, 0x39416268, 0x32190108, 0x39016268, 0x39417268, 0x321c0108,
+        0x39017268, 0xfd4023e8, 0xa9484ff4, 0xa94757f6, 0xf9402ff9, 0xa9465ff8,
+        0xa944fbfd, 0x910243ff, 0xd65f03c0, 0xf9401677, 0x91008278, 0xeb1802ff,
+        0x54fffde0, 0xd503201f, 0xf85f8ee8, 0xaa1503e1, 0xaa1703e0, 0xaa1403e2,
+        0xf9405108, 0x2a1603e3, 0xd63f0100, 0xf9400af7,
+    ), 'BOTW Pane::Calculate OBS35 scratch-register liveness changed'
+    assert tuple(word(o) for o in range(0xf57ba0, 0xf57bb8, 4)) == (
+        0xd10143ff, 0xa9027bfd, 0xa90357f6, 0xa9044ff4, 0x910083fd, 0xf9401008,
+    ), 'BOTW native BoxCursorControl update entry changed; revalidate requested-entry hook and x0 manager'
+    # A new save skips Title and may not update a cursor until after gameplay
+    # begins. Observe the completed constructor too. Its base constructor
+    # preserves x0, all manager fields are initialized, and the remaining
+    # epilogue reads no x9-x17 before ret.
+    assert tuple(word(o) for o in range(0xf54678, 0xf54694, 4)) == (
+        0x90006dc8, 0x91126108, 0xf900101f, 0x91002009, 0xa9002408, 0xa9017c09, 0xd65f03c0,
+    ), 'BOTW cursor base constructor changed; revalidate preserved x0 at construction observer'
+    assert tuple(word(o) for o in range(0xf579d8, 0xf57a14, 4)) == (
+        0xa9be7bfd, 0xf9000bf3, 0x910003fd, 0xaa0003f3, 0x97fff324,
+        0xb0006da8, 0x9137e108, 0xf9002e7f, 0xa902fe7f, 0xf9000268,
+        0xa903fe7f, 0xa904fe7f, 0xf9400bf3, 0xa8c27bfd, 0xd65f03c0,
+    ), 'BOTW cursor constructor changed; revalidate initialized manager and epilogue scratch liveness'
+    # The touch category change runs the game's own sequence: both page
+    # fields move to the category's first page, the three item lists are
+    # re-laid out while keeping the carousel slot the page already occupied,
+    # and the current category follows. The relayout entry and the
+    # current-category writer are build-gated.
+    assert tuple(word(o) for o in range(0xe3af74, 0xe3af94, 4)) == (
+        0x6db923e9, 0xa9017bfd, 0xa9026ffc, 0xa90367fa,
+        0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910043fd,
+    ), 'BOTW inventory list relayout entry changed; revalidate native category relayout'
+    assert tuple(word(o) for o in range(0xe3b20c, 0xe3b240, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd, 0xaa0003f4, 0x2a0103e0,
+        0x2a0103f3, 0x9400d796, 0x5286d208, 0xb93a1280, 0x8b080295, 0xb9770a88,
+        0xaa1503e0,
+    ), 'BOTW inventory current-category writer changed; revalidate screen+0x3a10 update'
+    # Select the first item without invoking Sort (e3f924). The native setter
+    # clears the old item/id and focuses the requested row of the pending page.
+    assert tuple(word(o) for o in range(0xe3dd14, 0xe3dd30, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xf9407008,
+        0x2a0103f4, 0xaa0003f3, 0xb4000148,
+    ), 'BOTW inventory item selection entry changed; revalidate category selection without sorting'
+    assert tuple(word(o) for o in range(0xe3dd54, 0xe3dd70, 4)) == (
+        0xb9766261, 0xaa1303e0, 0x2a1403e2, 0xb9366674,
+        0xf91b267f, 0xb936527f, 0x94000146,
+    ), 'BOTW inventory item selection changed; revalidate stale-item reset and native focus'
+    assert tuple(word(o) for o in range(0xe3bacc, 0xe3bae0, 4)) == (
+        0xa9bc7bfd, 0xf9000bf7, 0xa90257f6, 0xa9034ff4, 0x910003fd,
+    ), 'BOTW inventory focus callback entry changed; revalidate category item refresh'
+    assert tuple(word(o) for o in range(0xe3bb14, 0xe3bb28, 4)) == (
+        0xf95b2676, 0xf91b2675, 0x90007fe8, 0x9112e108, 0xb9365274,
+    ), 'BOTW inventory focus callback changed; revalidate item pointer and cursor id'
+    assert tuple(word(o) for o in range(0xe3bb64, 0xe3bb88, 4)) == (
+        0xeb1502df, 0xaa1303e0, 0xf9400bf7, 0xaa1503e1, 0xa9434ff4,
+        0xa94257f6, 0x1a9f07e2, 0xa8c47bfd, 0x17ffe118,
+    ), 'BOTW inventory focus card update changed; revalidate selection refresh without sorting'
+    # The unguarded transition-state body re-enables the current page after
+    # relayout. The public e39bfc entry skips it when transition is already 0.
+    assert tuple(word(o) for o in range(0xe39c08, 0xe39c28, 4)) == (
+        0xa9bd7bfd, 0xf9000bf5, 0xa9024ff4, 0x910003fd,
+        0xaa0003f4, 0x9105e000, 0x2a0103f3, 0x94172766,
+    ), 'BOTW inventory page activation entry changed; revalidate category input refresh'
+    assert tuple(word(o) for o in range(0xe39c78, 0xe39c88, 4)) == (
+        0x7100027f, 0x1a9f17e1, 0x97fe34f0, 0xb9368e93,
+    ), 'BOTW inventory page activation changed; revalidate native button eligibility'
+    # Equipment short taps call the native Equip action with equip=true;
+    # long presses keep the normal item menu. Validate the entry, its native
+    # caller and the item type/availability/equipped fields the host reads.
+    assert tuple(word(o) for o in range(0xe3f378, 0xe3f398, 4)) == (
+        0xd10203ff, 0xa9027bfd, 0xa9036ffc, 0xa90467fa,
+        0xa9055ff8, 0xa90657f6, 0xa9074ff4, 0x910083fd,
+    ), 'BOTW inventory equipment action changed; revalidate direct equipment taps'
+    assert tuple(word(o) for o in range(0xe40c04, 0xe40c1c, 4)) == (
+        0xaa1303e0, 0x2a1f03e1, 0x14000003, 0xaa1303e0, 0x52800021, 0x97fff9d8,
+    ), 'BOTW inventory Equip/Remove dispatch changed; revalidate equip=true'
+    assert tuple(word(o) for o in range(0xe3bae0, 0xe3baf0, 4)) == (
+        0xb9404434, 0x51002688, 0x7100ed1f, 0x540000c9,
+    ), 'BOTW inventory cursor id changed; revalidate acknowledged equipment selection'
+    assert tuple(word(o) for o in range(0xe3f450, 0xe3f45c, 4)) == (
+        0xf95b2668, 0xf946ad29, 0xb9401919,
+    ), 'BOTW inventory selected item/type changed; revalidate equipment eligibility'
+    assert tuple(word(o) for o in range(0xe3401c, 0xe3402c, 4)) == (
+        0xb4000301, 0x39409428, 0xaa0103f6, 0x340002a8,
+    ), 'BOTW inventory item availability changed; revalidate direct equipment taps'
+    assert tuple(word(o) for o in range(0xe3ea20, 0xe3ea30, 4)) == (
+        0xf95b2668, 0x2a0003f6, 0x39409108, 0x350003a8,
+    ), 'BOTW inventory equipped flag changed; revalidate idempotent equipment taps'
+    assert tuple(word(o) for o in range(0xd6f034, 0xd6f054, 4)) == (
+        0xd101c3ff, 0x6d0123e9, 0xa9027bfd, 0xa90367fa,
+        0xa9045ff8, 0xa90557f6, 0xa9064ff4, 0x910083fd,
+    ), 'BOTW shared list-widget update entry changed; revalidate passive OBS38 receiver and x0 ABI'
+    assert tuple(word(o) for o in range(0xd6d710, 0xd6d728, 4)) == (
+        0xb9829808, 0x34000808, 0xf941500a, 0x8b080d4b,
+        0xf9414808, 0xb9428809,
+    ), 'BOTW read-only list-entry index resolver changed; revalidate OBS38 model query'
+    assert tuple(word(o) for o in range(0xd6fe80, 0xd6fe98, 4)) == (
+        0x37f80221, 0xf941480a, 0xaa0003e8, 0xb40001ca,
+        0xb9828909, 0x34000189,
+    ), 'BOTW read-only list descriptor resolver changed; revalidate OBS38 round-trip query'
+    assert tuple(word(o) for o in range(0xd6c870, 0xd6c888, 4)) == (
+        0xa9be7bfd, 0xa9014ff4, 0x910003fd, 0xaa0003f3,
+        0x3100043f, 0x540000e1,
+    ), 'BOTW native list selection entry changed; revalidate screen-owned row selection'
+    assert tuple(word(o) for o in range(0xd6c244, 0xd6c25c, 4)) == (
+        0xd10103ff, 0xa9017bfd, 0xf90013f5, 0xa9034ff4,
+        0x910043fd, 0xb942a808,
+    ), 'BOTW native list page setter changed; revalidate category taps and list scrolling'
+    assert tuple(word(o) for o in range(0xd6bfa0, 0xd6bfb8, 4)) == (
+        0xd101c3ff, 0x6d012beb, 0x6d0223e9, 0xa9037bfd, 0xa9045ff8, 0xa90557f6,
+    ), 'BOTW native list transition entry changed; revalidate immediate Compendium categories'
+    assert tuple(word(o) for o in range(0xd6c128, 0xd6c18c, 4)) == (
+        0x510006a8, 0xb9033a75, 0x7100051f, 0x540000a9, 0x52800020, 0x17ffffae,
+        0x2a1f03e0, 0x17ffffac, 0x71000abf, 0xaa1303e0, 0x1a9f07e1, 0x94000b02,
+        0x12800008, 0x910033e5, 0xb9000fe8, 0xaa1303e0, 0x2a1403e1, 0x2a1603e2,
+        0x2a1f03e3, 0x2a1f03e4, 0x940000c5, 0xb9400fe1, 0xaa1303e0, 0x940001bb,
+        0x17ffffec,
+    ), 'BOTW list mode-1 completion/first-item selection changed; revalidate Compendium category jumps'
+    assert tuple(word(o) for o in range(0xd6ed94, 0xd6edcc, 4)) == (
+        0xb942e808, 0xb942f009, 0xb902ec09, 0xbd02c000, 0xbd02c401, 0xb902e408,
+        0xb942dc08, 0xb902d808, 0x9400040f, 0xb9033660, 0x52800048, 0xaa1303e0,
+        0x52800021, 0xb9033268,
+    ), 'BOTW native list current/target synchronization changed; revalidate immediate category position'
+    assert tuple(word(o) for o in range(0xd8caac, 0xd8cac0, 4)) == (
+        0xbd400020, 0xbd088000, 0xbd400420, 0xbd088400, 0xd65f03c0,
+    ), 'BOTW current map origin setter changed; revalidate direct touch dragging'
+    assert tuple(word(o) for o in range(0xd7a938, 0xd7a94c, 4)) == (
+        0xbd400020, 0xbd004000, 0xbd400420, 0xbd004400, 0xd65f03c0,
+    ), 'BOTW target map origin setter changed; revalidate direct touch dragging'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdb958 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xd66bb0, 0xd6f034, 0xd66bd4,
+    ), 'BOTW inventory list-widget vtable address point changed; revalidate OBS38 receiver class'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cdbb58 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xd71710, 0xd6f034, 0xd66bd4,
+    ), 'BOTW Quest list-widget vtable address point changed; revalidate OBS38 receiver class'
+    assert tuple(struct.unpack_from('<Q', ctx.image, 0x1cfcf78 + off)[0] for off in (0, 8, 0x20, 0x40)) == (
+        0xf5466c, 0xe4a2e4, 0xd6f034, 0xd66bd4,
+    ), 'BOTW shop list-widget vtable address point changed; revalidate direct purchase-row selection'
+
 BUILD_ID = d[0x40:0x50].hex()
+if BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee':
+    from types import SimpleNamespace
+    validate_botw_touch_main(SimpleNamespace(image=IMG))
 # 构建期产品规则：旧原资源/对拍域默认不变；触屏版单独出新版本，不在运行时写客体代码。
 # Build-time product rules: the old original-resource / comparison domain is unchanged by default; the touchscreen version is issued separately as a new version, and guest code is not written at runtime.
 RULESET = os.environ.get('DM_RULESET', 'native')
@@ -878,9 +1109,8 @@ if RULE_RUN and PRIVATE_GATES:
 for off, oid, ow, why in obs:
     w = struct.unpack_from('<I', IMG, off)[0]
     assert f'{w:08x}' == ow, f'观测门原指令不符 {off:#x}：{w:08x}'
-    # 只许函数入口：dm_gate 只回写 x0–x8 / x30，宿主 C 代码可能改 x9–x17；入口处这些按 AAPCS64 不承载值（参数只在 x0–x7 / x8）
-    # Function entries only: dm_gate writes back only x0–x8 / x30, and host C code may modify x9–x17; at entry these carry no values under AAPCS64 (arguments are only in x0–x7 / x8)
-    assert off in set(starts) or (oid == 6 and off == 0x43ecc8), f'private obs point not approved {off:#x}'
+    # BOTW's interior sites passed validate_botw_touch_main above; gate.S restores all GPRs and SIMD lanes.
+    assert off in set(starts) or (oid == 6 and off == 0x43ecc8) or BUILD_ID == 'cd57b23fa4bbad65803d9788c01821ee', f'private obs point not approved {off:#x}'
     assert off < TEXT_END and off not in kinds and not any(lo <= off < hi for wseg in windows for lo, hi in [(wseg[0].address, wseg[-1].address + 4)]), f'观测门与改写点冲突 {off:#x}'
     put_branch(off, site_obs(off, oid, w)); stat('obs')
 

@@ -23,11 +23,13 @@ def developer_dir():
     except (OSError, subprocess.CalledProcessError): pass
     apps = sorted(Path('/Applications').glob('Xcode*.app'), key=lambda p: (p.name != 'Xcode.app', p.name))
     candidates += [str(p / 'Contents/Developer') for p in apps]
+    for candidate in candidates:
+        if candidate and has_ios_sdk(candidate): return candidate
     try:
         found = subprocess.check_output(['mdfind', "kMDItemCFBundleIdentifier == 'com.apple.dt.Xcode'"], text=True,
-                                        stderr=subprocess.DEVNULL)
+                                        stderr=subprocess.DEVNULL, timeout=10)
         candidates += [line + '/Contents/Developer' for line in found.splitlines() if line.endswith('.app')]
-    except (OSError, subprocess.CalledProcessError): pass
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired): pass
     for candidate in candidates:
         if candidate and has_ios_sdk(candidate): return candidate
     raise RuntimeError('no Xcode with the iOS SDK found: install Xcode, or set DEVELOPER_DIR=<Xcode.app>/Contents/Developer')

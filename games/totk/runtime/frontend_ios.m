@@ -7,6 +7,9 @@
 #include <stdatomic.h>
 #include "runtime.h"
 #include "totk_ui_lang.h"
+#if __has_include(<adapters/macnativegames/ios/boot_overlay.h>)
+#include <adapters/macnativegames/ios/boot_overlay.h>
+#endif
 static CAMetalLayer *metalLayer;
 static UIView *bootOverlay;
 static UILabel *bootStage,*bootDetail;
@@ -158,7 +161,12 @@ void runtime_ios_attach_layer(CAMetalLayer *layer,UIView *host){
  bootDetail.font=[UIFont systemFontOfSize:14];bootDetail.textAlignment=NSTextAlignmentCenter;
  bootDetail.numberOfLines=2;bootDetail.adjustsFontSizeToFitWidth=YES;bootDetail.minimumScaleFactor=0.6;   /* a message (no game data) fits in two lines */
  bootProgress=[[UIProgressView alloc] initWithFrame:CGRectMake(w/2-140,h/2+30,280,8)];bootProgress.hidden=YES;
- [bootOverlay addSubview:bootStage];[bootOverlay addSubview:bootDetail];[bootOverlay addSubview:bootProgress];[host addSubview:bootOverlay];
+#if __has_include(<adapters/macnativegames/ios/boot_overlay.h>)
+ tnx_mng_layout_boot_overlay(bootOverlay,bootStage,bootDetail,bootProgress);
+#else
+ [bootOverlay addSubview:bootStage];[bootOverlay addSubview:bootDetail];[bootOverlay addSubview:bootProgress];
+#endif
+ [host addSubview:bootOverlay];
  NSNotificationCenter *nc=NSNotificationCenter.defaultCenter;
  [nc addObserverForName:UIApplicationWillResignActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n){(void)n;app_active_changed(0);}];
  [nc addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:nil usingBlock:^(NSNotification *n){(void)n;app_active_changed(1);}];

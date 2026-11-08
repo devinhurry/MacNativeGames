@@ -18,6 +18,10 @@
 #include <fcntl.h>
 #include "nvn_mtl.h"
 #include "nvn_obj.h"
+#include "botw_ui_scope.h"
+#ifdef GAME_BOTW190
+#include "../../../../runtime/botw_touch/graphics.h"
+#endif
 #include "nvn_ctl.h"   // NVN / NVN2 control sections
 #include "nvn_quad_strip.h"
 #include "nvn_impl.h"   // NVN_BLOCKING: release the guest core only while a write-back waits
@@ -662,13 +666,13 @@ void mtl_init(void) {
     g_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_ct) MDIE("建立 compute argument table 失败：%s", ate.localizedDescription.UTF8String);
     g_up_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_up_ct) MDIE("建立上传 compute argument table 失败：%s", ate.localizedDescription.UTF8String);
     MTL4ArgumentTableDescriptor *pad = [MTL4ArgumentTableDescriptor new];
-    pad.maxTextureBindCount = 1; pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
+    pad.maxTextureBindCount = 2; pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
     g_bloomq_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
     if (!g_bloomq_args) MDIE("建立泛光 1/4 argument table 失败：%s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
         g_present_args[i] = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
         if (!g_present_args[i]) MDIE("建立出图 argument table[%d] 失败：%s", i, ate.localizedDescription.UTF8String);
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 12 options:MTLResourceStorageModeShared];
+        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 24 options:MTLResourceStorageModeShared];
         if (!g_present_uv[i]) MDIE("建立出图 UV 缓冲[%d] 失败", i);
         res_add(g_present_uv[i]);
         if (g_present_probe) {
@@ -6343,7 +6347,7 @@ static NvShader *shader_get(NSString *pc, int stage) {
     pso_record("S\t%s\t%d\n", pc.UTF8String, stage);
     pso_user_record("S\t%s\t%d\n", pc.UTF8String, stage);
     g_bp_lib_n++; atomic_fetch_add_explicit(&g_bp_lib_ns, bp_now() - bt, memory_order_relaxed);
-    if (survey_shader_log() && !taken) MLOG("[survey-shader] frame %llu Metal library stage %d %s in %.2f ms%s", (unsigned long long)atomic_load(&g_cur_frame), stage, pc.UTF8String, (bp_now() - bt) / 1e6, predicted ? " (compiled for prediction; waited)" : "");
+    if ((survey_shader_log() || (getenv("TOUCHNX_GPU_TIMING") && atomic_load(&g_cur_frame)>0 && bp_now()-bt>=50000000)) && !taken) MLOG("[survey-shader] frame %llu Metal library stage %d %s in %.2f ms%s", (unsigned long long)atomic_load(&g_cur_frame), stage, pc.UTF8String, (bp_now() - bt) / 1e6, predicted ? " (compiled for prediction; waited)" : "");
     return o;
 }
 static NSDictionary *rt_answers(int st);
@@ -8755,7 +8759,7 @@ static void pso_adopt(const pso_key *k, NvShader *vs, NvShader *fs, int border, 
     if (k->a2c & PSO_HDR) { hm_put_id(&g_pso, k, ps); g_pso_gen++; return; }   // HDR pipelines (PR #1129): built on use, never recorded in the lists
     pso_key rk = *k; rk.a2c &= ~PSO_VBORDER; if (border) rk.fsfn = NULL;   // the warm-up list records the plain pipeline: a border variant is built from the draw's samplers
     pso_skey sk; char shex[sizeof sk * 2 + 1]; pso_skey_from(&rk, vs, fs, merged, merged ? &g_pso_fz : NULL, &sk); pso_skey_hex(&sk, shex);
-    if (survey_shader_log()) MLOG("[survey-shader] frame %llu render pipeline %s in %.2f ms%s%s%s%s", (unsigned long long)atomic_load(&g_cur_frame), shex, (bp_now() - bt) / 1e6, bg ? " (background, from queued to adopted)" : "",
+    if (survey_shader_log() || (getenv("TOUCHNX_GPU_TIMING") && atomic_load(&g_cur_frame)>0 && bp_now()-bt>=50000000)) MLOG("[survey-shader] frame %llu render pipeline %s in %.2f ms%s%s%s%s", (unsigned long long)atomic_load(&g_cur_frame), shex, (bp_now() - bt) / 1e6, bg ? " (background, from queued to adopted)" : "",
                                   (k->a2c & PSO_VBORDER) ? " [vertex border]" : "", border && k->fsfn && (__bridge id)k->fsfn == g_pso_fbfn ? " [tile read]" : border ? " [fragment border]" : "", brec ? " [recipe]" : "");
     pso_record("R\t%s\n", shex);
     pso_user_record("R\t%s\n", shex);
@@ -10231,6 +10235,11 @@ static uint64_t vr_palette_patch(const uint8_t *src, uint64_t size) {   // 0: no
     static int said; if (!said) { said = 1; MLOG("[vr] the head bone scaled to nothing (bone %ld of the head mesh, joint %.2f m): the neck closed", g_vr_head_bone, j); }
     return gpu;
 }
+#ifdef GAME_BOTW190
+#include "botw_ui_projection.inc"
+#else
+static int botw_ui_uniform_active(void) { return 0; }
+#endif
 static uint64_t ui_mat_patch(const p_bind_buf *u, void *mb, uint64_t mo) {
     enum { RING = 4 << 20 }; static __strong id<MTLBuffer> ring; static uint64_t ring_gpu, la, ls, lp, lg; static size_t at; static double lo;
     if (!ring) { ring = [g_dev newBufferWithLength:RING options:MTLResourceStorageModeShared]; res_add(ring); ring_gpu = ring.gpuAddress; }
@@ -10446,8 +10455,11 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
         registry_unlock();
     }
     int reuse = !ab_noreuse && !passdump() && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 &&
-        !((g_vr_collapse_draw || g_vr_ui_ray_draw) && nvn_stage == 0) &&   // Per-draw palette/HUD projection copies must be bound anew.
-        (epoch_mode ? epoch_hit : !g_args_dirty[nvn_stage]);
+        !((g_vr_collapse_draw || g_vr_ui_ray_draw || botw_ui_uniform_active()) && nvn_stage == 0)
+#ifdef GAME_BOTW190
+        && !(nvn_stage == 1 && g_ui_dock_copy)
+#endif
+        && (epoch_mode ? epoch_hit : !g_args_dirty[nvn_stage]);
     int verify_epoch = reuse && epoch_mode && atomic_load_explicit(&g_arg_epoch_check, memory_order_relaxed);
     if (reuse) {
         if (epoch_mode) { atomic_fetch_add_explicit(&g_arg_epoch_hits, 1, memory_order_relaxed); if (g_args_dirty[nvn_stage]) atomic_fetch_add_explicit(&g_arg_epoch_extra, 1, memory_order_relaxed); }
@@ -10463,9 +10475,13 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
     static uint64_t bl_pass[6]; static int bl_all = -1; if (bl_all < 0) bl_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL || getenv("TOTK_INPUT_FILE") != NULL;   // 每次新编都记（否则只记每通道每阶段第一次） | Record on every new encode (otherwise only the first time per pass per stage)
     int bl = passdump() && (bl_all || bl_pass[nvn_stage] != g_stat_pass);
     if (bl) { bl_pass[nvn_stage] = g_stat_pass; PD("K %llu st%d key=%s nb=%d prog=%p", g_stat_pass, nvn_stage, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sh->rf.nb, (const void *)S.prog); }
-    int cbc = !bl && !g_res_check_on && g_use != USE_REC ? cbc_mode() : 0;   // TOTK_CBUF_CACHE (see cbc_ctx)
+    int cbc = !bl && !g_res_check_on && g_use != USE_REC ? cbc_mode() : 0;
+    if (nvn_stage == 0 && botw_ui_uniform_active()) cbc = 0;   // TOTK_CBUF_CACHE (see cbc_ctx)
     int slot_mode = tex_slots_on() && !verify_epoch && nvn_stage != 5 && arg_epoch_safe(sh) && !ab_noreuse &&
         !passdump() && !g_res_check_on && g_use != USE_REC && !tex_slots_diagnostics() && !nan_trace_match(sh);
+    #ifdef GAME_BOTW190
+    if (nvn_stage == 1 && g_ui_dock_copy) slot_mode = 0;
+#endif
     int slot_check = slot_mode && atomic_load_explicit(&g_tex_slots_check, memory_order_relaxed);
     tex_slot_key slot_key = {0}; uint64_t slot_mask = 0, slot_hits = 0, slot_misses = 0;
     uint64_t handles[NVN_REFL_MAXB];
@@ -10512,6 +10528,15 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             if (ren) { gpu = ren; if (nvn_stage == 0 && reg == 0 && ui_mat_on()) RED_ONCE(58, "UI 矩阵修补读的是内存，跳过了含内联更新的 uniform 副本"); }
             else if (nvn_stage == 0 && reg == 0 && ui_mat_on()) { uint64_t pg = ui_mat_patch(u, mb, mo); if (pg) gpu = pg; }
             else { const usnap_t *sc = usnap_find(u->addr, u->size ? u->size : 1); if (sc) gpu = sc->gpu + (u->addr - sc->lo); }   // TOTK: contents as of the submit call
+#ifdef GAME_BOTW190
+            if (nvn_stage == 0 && (reg == 0 || reg == 10) && botw_ui_uniform_active() && u->size && u->size <= 65536) {
+                const uint8_t *actual = bound_uniform_bytes(gpu, u->size, (__bridge id<MTLBuffer>)mb);
+                if (!actual) MDIE("BOTW UI lost its uniform snapshot");
+                id<MTLBuffer> copy; size_t off = arena_alloc(u->size, &copy);
+                ui_projection_copy(reg, (const float *)actual, (float *)((uint8_t *)copy.contents + off), u->size);
+                gpu = copy.gpuAddress + off;
+            }
+#endif
             if (g_vr_collapse_draw && nvn_stage == 0 && reg == 2 && u->size <= 48 * 256) {   // zeldaVR: bones scaled to nothing, from the contents this draw reads (inline updates too)
                 static uint8_t pal[48 * 256]; pend_materialize(u->addr, pal, (size_t)u->size, 0);
                 uint64_t pg = vr_palette_patch(pal, u->size); if (pg) gpu = pg; }
@@ -10597,6 +10622,9 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                 if (av) { t = av; trid = av.gpuResourceID._impl; } }
             if (t && tid && tid < g_ntreg && R.has_rt) { id<MTLTexture> mv = mip_feedback_view(t, g_treg[tid].t.serial); if (mv) { t = mv; trid = mv.gpuResourceID._impl; } }
             if (g_mfxup_out && (__bridge void *)sh == (__bridge void *)g_mfxup_sh && t == g_mfxup_src) { t = g_mfxup_out; trid = t.gpuResourceID._impl; }   // TOTK_MFX_UPSCALE
+#ifdef GAME_BOTW190
+            if (nvn_stage == 1 && reg == 0 && g_ui_dock_copy && g_ui_dock_image) { t=g_ui_dock_image; trid=t.gpuResourceID._impl; }
+#endif
             slots[aid] = trid;
             USE(t, MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_IMG) {   // 可写贴图：NVN 图像槽 r（BindImages）↔ D3D u_r | Writable texture: NVN image slot r (BindImages) ↔ D3D u_r
@@ -13744,7 +13772,43 @@ static void skv_done(skv_item *l, int n, uint32_t frame) {   /* submission compl
     for (int j = 0; j < n; j++) { skv_ent *e = &g_skv[l[j].idx]; if (e->last_frame != frame) { e->last_frame = frame; if (e->nonzero_frame == frame) { if (e->streak >= SKV_STREAK) { g_skv_revived++; e->stable_after = frame + SKV_HOLD; } e->streak = 0; } else if (e->streak < 1000) e->streak++; } CFRelease(l[j].buf); }
     free(l);
 }
-static void draw(const p_draw *dw, const p_draw_idx *di) { g_vr_ui_ray_draw=0;g_draw_depth++; draw_inner(dw, di);g_vr_ui_ray_draw=0; if (g_draw_depth == 1) nan_draw_probe(dw, di); g_draw_depth--; }
+#ifdef GAME_BOTW190
+#include "botw_rune_capture.inc"
+#include "botw_ui_layout.inc"
+static int g_botw_ui_scope;
+#endif
+static void draw(const p_draw *dw, const p_draw_idx *di) {
+#ifdef GAME_BOTW190
+    p_draw a; p_draw_idx b;int scope=0,previous=g_botw_ui_scope;
+    if(dw){a=*dw;draw_ui_scope(&a.instances,&a.base_instance,&scope);dw=&a;}
+    if(di){b=*di;draw_ui_scope(&b.instances,&b.base_instance,&scope);di=&b;}
+    g_botw_ui_scope=scope ? scope : previous;
+
+#endif
+    g_vr_ui_ray_draw=0;g_draw_depth++;
+#ifdef GAME_BOTW190
+    float region[4]; int seated=dm_aspect_region(1,region);
+    int dock=seated && R.rt.n>0 && R.rt.color[0] && R.rt.color[0]->serial==g_ui_tex && ui_dock_scope(g_botw_ui_scope);
+    NvProg *program=S.prog ? prog_get(S.prog) : nil;
+    int composite=seated && R.rt.n>0 && R.rt.color[0] && xv_present(R.rt.color[0]->serial) &&
+        program && program->sh[1] && !strncmp(program->sh[1]->key,DM_GAME_ASPECT_CANVAS,16);
+    if (dock) {
+        seated_dock_prepare(R.rt.color[0]); __typeof__(R) saved=R;
+        R.rt=(p_set_rt){.n=1,.color={&g_ui_dock_tex}}; R.has_rt=1;
+        blend_st blend=S.blend[0]; if(S.color.blend_en&1) S.blend[0]=ui_dock_blend(blend);
+        g_pso_dirty=1; g_ui_dock_draw=1; draw_inner(dw,di);
+        g_ui_dock_encoder=(id<MTL4RenderCommandEncoder>)g_enc; g_ui_dock_draw=0; R=saved;
+        S.blend[0]=blend; g_pso_dirty=1;
+    } else { seated_dock_finish(); if(!composite || !seated_composite(program)) draw_inner(dw,di); }
+#else
+    draw_inner(dw,di);
+#endif
+    g_vr_ui_ray_draw=0;
+    if(g_draw_depth==1)nan_draw_probe(dw,di);g_draw_depth--;
+#ifdef GAME_BOTW190
+    g_botw_ui_scope=previous;
+#endif
+}
 // TOTK: an update makes the argument buffers of the stages whose bound uniform ranges overlap it stale.
 static void upd_dirty_stages(uint64_t lo, uint64_t hi) {
     for (int st = 0; st < 6; st++) for (int r = 0; r < 16; r++) {
@@ -14615,6 +14679,10 @@ static void vis_count_begin(id<MTL4RenderCommandEncoder> en) {
         }
 }
 static void draw_inner(const p_draw *dw, const p_draw_idx *di) {
+#ifdef GAME_BOTW190
+    g_ui_clip_x=g_ui_clip_y=1; g_ui_clip_bias=g_ui_clip_bias_y=0;
+    g_ui_copy_x=1; g_ui_copy_bias=0; g_ui_dock_copy=0;
+#endif
     NSUInteger native_output_width=0,native_output_height=0;
     uint64_t native_output_source=0;
     if(g_host_rect_draw){g_host_rect_draw=0;g_pso_dirty=1;}
@@ -14636,6 +14704,22 @@ static void draw_inner(const p_draw *dw, const p_draw_idx *di) {
     if (g_nupd) upd_guard_draw(pr, di);   // TOTK: before any encoder or texture preparation of this draw
     { int fit = pr ? prog_fit(pr) : 0; if (fit < 0) { draw_skipped(); return; } if (fit) g_pso_dirty = 1; }
     if (skv_on()) { g_skv_draws++; if (skv_check((__bridge const void *)pr, dw, di)) return; }   // measurement experiment: skip draws invisible in the last frames
+#ifdef GAME_BOTW190
+    double botw_sux=1,botw_suy=1; int botw_sq=ui_squeeze_scale(pr,&botw_sux,&botw_suy,g_botw_ui_scope);
+    if (g_ui_map_capture.frame==atomic_load(&g_cur_frame) && g_ui_map_capture.canvas && R.rt.n>0 && R.rt.color[0] &&
+        R.rt.color[0]->serial!=g_ui_map_capture.canvas && pr->sh[0] && !strncmp(pr->sh[0]->key,"17dccd27ad609e8b",16)) {
+        int tid=(int)(S.tex[1][0]&0xfffff);
+        if(tid>0 && tid<g_ntreg && g_treg[tid].ok && g_treg[tid].t.serial==g_ui_map_capture.canvas) {
+            float cb[28]; pend_materialize(S.ubo[0][0].addr,cb,sizeof cb,0);
+            float region[4];
+            if(dm_aspect_region(1,region) && g_ui_dock_image && ui_capture_bounds(cb,g_ui_map_capture.rect)) g_ui_dock_copy=1;
+            if(ui_capture_projection(cb,g_ui_map_capture.rect,g_ui_map_capture.x,g_ui_map_capture.bias)) {
+                g_ui_copy_x=g_ui_map_capture.x; g_ui_copy_bias=g_ui_map_capture.bias;
+            }
+        }
+    }
+    if(g_botw_ui_scope==NVN_UI_RUNE && dm_botw_touch_hud_active()) botw_rune_capture();
+#endif
     geometry_dump(pr, dw, di);
     if (di && di->itype == 0 && di->count && pend_hits(di->ibuf, (uint64_t)di->count)) widen_indices_gpu(di);
     /* Merge/skip checks can resolve sampling views too; prepare before any of those checks. */
@@ -15046,6 +15130,60 @@ frz_plain:;
                                  : g_vis_counting;
     if (taa_jittered() && nv > 6 && vo == 0 && vs == 1 && ux == 1 && uy == 1 && !vis_proxy && !fb_fn && !att_n && !(!att_store_on() && draw_att_reads(pr, att_rs)))
         taa_jitter(&jx, &jy);
+#ifdef GAME_BOTW190
+    int ui_projection = g_ui_layout_draw && botw_sq && (botw_sux > 1 || g_botw_ui_scope == NVN_UI_WEATHER);
+    int ui_projection_y = g_ui_layout_draw && botw_sq && g_botw_ui_scope == NVN_UI_WEATHER;
+    g_ui_clip_x = ui_projection ? 1 / botw_sux : 1; g_ui_clip_bias = 0;
+    g_ui_clip_y = ui_projection_y ? 1 / botw_suy : 1; g_ui_clip_bias_y = 0;
+    int ui_region=g_ui_region[0]!=0 || g_ui_region[1]!=0 || g_ui_region[2]!=1 || g_ui_region[3]!=1;
+    double region_x=0,region_y=0;
+    if (ui_region) {
+        MTLViewport canvas=ui_canvas_viewport(tw,th);
+        region_x=canvas.originX*(1-g_ui_region[2])+canvas.width*g_ui_region[0];
+        region_y=canvas.originY*(1-g_ui_region[3])+canvas.height*g_ui_region[1];
+    }
+    if ((ui_projection || g_ui_dock_draw) && g_botw_ui_scope == NVN_UI_MAP && R.has_sc &&
+        R.sc.w > 0 && R.sc.h > 0 && (R.sc.w < tw || R.sc.h < th)) {
+        g_ui_map_capture.frame = atomic_load(&g_cur_frame);
+        g_ui_map_capture.canvas = g_ui_dock_draw ? g_ui_tex : R.rt.color[0]->serial;
+        g_ui_map_capture.rect[0] = fmaxf(0, (float)R.sc.x/tw);
+        g_ui_map_capture.rect[1] = fmaxf(0, (float)R.sc.y/th);
+        g_ui_map_capture.rect[2] = fminf(1, (float)(R.sc.x+R.sc.w)/tw);
+        g_ui_map_capture.rect[3] = fminf(1, (float)(R.sc.y+R.sc.h)/th);
+        g_ui_map_capture.x = 1/botw_sux;
+        g_ui_map_capture.bias = g_ui_dock_draw ? 0 : dm_aspect_hud_offset(1)/(640*botw_sux);
+    }
+    // A corrected bank is a value snapshot, whereas an ordinary argument block
+    // points at the game's live uniforms. Refresh the snapshot for every draw.
+    if (ui_projection || ui_projection_y) g_args_dirty[0] = 1;
+    { MTLViewport v = S.has_vp ? (MTLViewport){S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0], S.dr[1]} : (MTLViewport){0, 0, tw, th, 0, 1};
+      if (ui_projection && v.width > 0) g_ui_clip_bias = (tw - 2 * v.originX - v.width) * (1 - g_ui_clip_x) / v.width;
+      if (ui_projection && g_botw_ui_scope == NVN_UI_MAP && v.width > 0 && !g_ui_dock_draw)
+          g_ui_clip_bias += dm_aspect_hud_offset(1) / (640.0 * botw_sux) * tw / v.width;
+      if (botw_sq) { if (!ui_projection) { v.originX = tw / 2.0 + (v.originX - tw / 2.0) / botw_sux; v.width /= botw_sux; }
+          if (!ui_projection_y) { v.originY = th / 2.0 + (v.originY - th / 2.0) / botw_suy; v.height /= botw_suy; } }
+      if (0) { v.originY += v.height; v.height = -v.height; }   // lower-left origin (see g_origin_ll)
+      if (ui_projection_y && v.height != 0) g_ui_clip_bias_y = (2 * v.originY + v.height - th) * (1 - g_ui_clip_y) / v.height;
+      v.originX=region_x+v.originX*g_ui_region[2]; v.width*=g_ui_region[2];
+      v.originY=region_y+v.originY*g_ui_region[3]; v.height*=g_ui_region[3];
+      vx=v.originX;vy=v.originY;vw=v.width;vh=v.height; }
+    MTLScissorRect sc = {0, 0, tw, th};
+    if ((R.has_sc || ui_region) && !S.raster_discard) {   // raster state cannot suppress vertex storage writes
+        long x0=0,y0=0,x1=tw,y1=th;
+        if (R.has_sc) { x0=R.sc.x < 0 ? 0 : R.sc.x; y0=R.sc.y <= 0 ? 0 : R.sc.y; x1=(long)R.sc.x+R.sc.w; y1=(long)R.sc.y+R.sc.h; }
+        if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
+        if (botw_sq) {
+            ui_scissor_x(&x0, &x1, (long)tw, botw_sux, ui_projection, g_botw_ui_scope);
+            ui_scissor_x(&y0, &y1, (long)th, botw_suy, ui_projection_y, NVN_UI_HUD);
+            if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0; if (x1 > (long)tw) x1 = tw; if (y1 > (long)th) y1 = th;
+        }
+        x0=floor(region_x+x0*g_ui_region[2]); x1=ceil(region_x+x1*g_ui_region[2]);
+        y0=floor(region_y+y0*g_ui_region[3]); y1=ceil(region_y+y1*g_ui_region[3]);
+        if (x1 <= x0 || y1 <= y0) { PD("Z %llu draw skipped: empty scissor (%d,%d %dx%d, target %lux%lu)", g_stat_pass, R.sc.x, R.sc.y, R.sc.w, R.sc.h, (unsigned long)tw, (unsigned long)th); return; }
+        sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
+    }
+
+#else
     MTLScissorRect sc = {0, 0, tw, th};
     if (R.has_sc) {
         long sx0 = R.sc.x, sx1 = (long)R.sc.x + R.sc.w;
@@ -15056,6 +15194,7 @@ frz_plain:;
         if (x1 <= x0 || y1 <= y0) { g_draw_skip[10]++; return; }
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
+#endif
     double native_vp[4]={vx+jx,vy+jy,vw,vh};
     vr_native_ui_layout(pr,native_vp,&sc,(unsigned)tw,(unsigned)th);
     if(native_output){native_vp[0]=native_vp[1]=0;native_vp[2]=native_output_width;native_vp[3]=native_output_height;
@@ -15099,8 +15238,11 @@ frz_plain:;
     vbuf_log(pr->sh[0], pr->sh[1], dw, di);
     if (g_lay.active) enc_r_vbuf(en, LAY_BUF_INDEX, lay_gpu(g_lay_probe_neg == 1 ? 0 : g_lay.cur - g_lay.base));   // TOTK: this draw's layer within the layered pass
     if (pr->sh[0]) encode_args(en, pr->sh[0], 0, 1);
-    if (pr->sh[0] && (g_vr_collapse_draw||g_vr_ui_ray_draw)) pr->sh[0]->ab_pass = 0;   // Per-draw immutable palette/HUD bytes cannot leak to the next draw.
+    if (pr->sh[0] && (g_vr_collapse_draw||g_vr_ui_ray_draw||botw_ui_uniform_active())) pr->sh[0]->ab_pass = 0;   // Per-draw immutable palette/HUD bytes cannot leak to the next draw.
     if (pr->sh[1]) encode_args(en, pr->sh[1], 1, 0);
+#ifdef GAME_BOTW190
+    if (pr->sh[1] && g_ui_dock_copy) pr->sh[1]->ab_pass=0;
+#endif
     // 参数绑定在登记表锁内捕获实际资源；资格判断到绑定期间有版本变化，则在任何GPU draw前切开重试。
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.
     if (g_rt_range_active && (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
@@ -15479,7 +15621,7 @@ static void dispatch(const p_dispatch *dp) {
         NSError *e = nil; uint64_t bt = bp_now(); ps = cs_new(cs, &e);
         g_bp_pso_n++; atomic_fetch_add_explicit(&g_bp_pso_ns, bp_now() - bt, memory_order_relaxed);
         if (!ps) { MLOG("【红】建计算管线失败：%s", e.localizedDescription.UTF8String); return; }
-        if (survey_shader_log()) MLOG("[survey-shader] frame %llu compute pipeline %s in %.2f ms", (unsigned long long)atomic_load(&g_cur_frame), cs->key, (bp_now() - bt) / 1e6);
+        if (survey_shader_log() || (getenv("TOUCHNX_GPU_TIMING") && atomic_load(&g_cur_frame)>0 && bp_now()-bt>=50000000)) MLOG("[survey-shader] frame %llu compute pipeline %s in %.2f ms", (unsigned long long)atomic_load(&g_cur_frame), cs->key, (bp_now() - bt) / 1e6);
         pso_record("C\t%s\n", cs->key);
         if (cs->key[0]) pso_user_record("C\t%s\n", cs->key);
         hm_put_id(&g_cps, &k, ps);
@@ -16228,6 +16370,9 @@ void mtl_exec(const uint8_t *p) {
                 PD("Y update_ub cmd=%p src=%#llx dst=%#llx bytes=%llu", p, (unsigned long long)((const uint8_t *)a + 16), (unsigned long long)d, (unsigned long long)n); mtl_sub_update((const uint8_t *)a + 16, d, n); break; }
             case OP_SET_RT: {
                 const p_set_rt *r = a;
+#ifdef GAME_BOTW190
+                seated_dock_finish();
+#endif
                 g_cg.rt_seq++; if (g_cg_pending && !cg_rt_match(r)) { g_cg.reason[0]++; cg_flush(); }   // TOTK: a target that is not a cube face set lands the pending groups
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
@@ -16248,6 +16393,9 @@ void mtl_exec(const uint8_t *p) {
             }
             case OP_CLEAR_COLOR: {
                 const p_clear_color *c = a;
+#ifdef GAME_BOTW190
+                seated_dock_finish();
+#endif
                 if (atomic_load(&g_draw_log) > 0 && c->index >= 0 && c->index < R.rt.n && R.rt.color[c->index])
                     MLOG("[uw] F%llu pass %llu clear c%d ser %llu %ux%u fmt %#x mask %#x rgba %g %g %g %g%s", (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass, c->index,
                          (unsigned long long)R.rt.color[c->index]->serial, R.rt.color[c->index]->d.width, R.rt.color[c->index]->d.height, R.rt.color[c->index]->d.format, c->mask,
@@ -16261,6 +16409,9 @@ void mtl_exec(const uint8_t *p) {
             }
             case OP_CLEAR_DS: {
                 const p_clear_ds *c = a;
+#ifdef GAME_BOTW190
+                seated_dock_finish();
+#endif
                 if (S.render_disabled) { g_draw_skip[12]++; PD("E clear ds skipped: rendering disabled"); break; }   // TOTK
                 if (g_rt_merged) rp_end();
                 if (!R.rt.depth || (!c->depth_mask && !(c->stencil_mask & 255))) break;
@@ -16297,6 +16448,11 @@ static id<MTLRenderPipelineState> g_blit_hdr_pso;
 static BOOL g_blit_hdr_source;
 static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
+#ifdef GAME_BOTW190
+#include "botw_present_filter.inc"
+#include "botw_seated.inc"
+static DmPresentLUT *g_botw_present_lut[3];
+#endif
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // 实际出图次数（发热归因 DM_HEAT 算出图帧率） | Actual present count (heat attribution DM_HEAT computes the present frame rate)
 void mtl_res_snapshot(mtl_res_count *out) {
@@ -16348,6 +16504,15 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
 static void (^g_grab_cb)(CGImageRef img);
+#ifdef GAME_BOTW190
+static int g_botw_grab_filter;
+void dm_launcher_grab_filter_frame(void (^callback)(CGImageRef)) {
+    pthread_mutex_lock(&g_shotq_mu);g_grab_cb=[callback copy];g_botw_grab_filter=1;pthread_mutex_unlock(&g_shotq_mu);
+}
+void dm_launcher_grab_game_frame(void (^callback)(CGImageRef)) {
+    pthread_mutex_lock(&g_shotq_mu);g_grab_cb=[callback copy];g_botw_grab_filter=0;pthread_mutex_unlock(&g_shotq_mu);
+}
+#endif
 void mtl_grab_next_present(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; pthread_mutex_unlock(&g_shotq_mu); }
 /* The window picture re-rendered offscreen by the legacy encoder: only for presents that draw no drawable
    (TOTK_PRESENT_SKIP measurement runs); a real present copies its drawable (present_now). */
@@ -17009,6 +17174,13 @@ static void outup_note_gpu(int slot) {   // the present command buffer of this s
 // black bars around it when the drawable has another shape (user 2026-10-25: 16:10 in full screen on a 3440x1440 display was stretched over all of
 // it, as was every ratio but 16:9). Within 1% (the remainder of a game width that is a multiple of 8, 1952x900 on 2868x1320 is 0.17%) it fills.
 static MTLViewport present_viewport(double dw, double dh, double cw, double ch) {
+#ifdef GAME_BOTW190
+    if (dm_aspect_native()) {
+        float region[4],ratio=dm_aspect_region(1,region) ? 0 : dm_aspect_custom_ratio();
+        if(ratio>0) { double w=fmin(dw,dh*ratio),h=w/ratio; return (MTLViewport){floor((dw-w)/2),floor((dh-h)/2),round(w),round(h),0,1}; }
+        return (MTLViewport){0,0,dw,dh,0,1};
+    }
+#endif
     static int stretch = -1;
     if (stretch < 0) { const char *e = getenv("TOTK_STRETCH"); stretch = e && !strcmp(e, "1"); }
     double a = runtime_aspect_now ? runtime_aspect_now() : 0, want = stretch ? dw / dh : a > 0 ? a : cw / ch;
@@ -17058,6 +17230,18 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     uv[8]=fminf(uv[8],t_hdr_present_peak);uv[9]=t_hdr_present_white;
 #endif
     [en setFragmentBytes:uv length:sizeof uv atIndex:0];
+#ifdef GAME_BOTW190
+    float filter[4];
+    if(present_filter_params(filter)) {
+        DmPresentLUT *lut=present_lut_for_mode((int)filter[0]);
+        float uniforms[24]={0}; memcpy(uniforms,uv,sizeof uv);
+        uniforms[10]=src.pixelFormat==MTLPixelFormatRGBA16Float; uniforms[11]=dst.pixelFormat==MTLPixelFormatRGBA16Float;
+        memcpy(uniforms+12,filter,sizeof filter); present_lut_domain(lut,uniforms+16);
+        [en setRenderPipelineState:texture_blit_pipeline(dst.pixelFormat,0,lut ? 2 : 1)];
+        [en setFragmentBytes:uniforms length:sizeof uniforms atIndex:0];
+        if(lut) { [en setFragmentTexture:lut->texture atIndex:1]; [cb addCompletedHandler:^(id<MTLCommandBuffer> done){ (void)done;(void)lut; }]; }
+    }
+#endif
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [en setRenderPipelineState:g_blit_pso];
     MTLViewport ovp; float fuv[8];
@@ -17115,6 +17299,18 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     [args setAddress:g_present_uv[uv_i].gpuAddress atIndex:0];
     [en setArgumentTable:args atStages:MTLRenderStageFragment];
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_hdr_pso && (pic.pixelFormat==MTLPixelFormatRGBA16Float || dst.pixelFormat==MTLPixelFormatRGBA16Float) ? g_blit_hdr_pso : g_blit_pso];   // as present_encode
+#ifdef GAME_BOTW190
+    float filter[4]; DmPresentLUT *lut=nil;
+    if(present_filter_params(filter)) {
+        lut=present_lut_for_mode((int)filter[0]);
+        uv[10]=pic.pixelFormat==MTLPixelFormatRGBA16Float;uv[11]=dst.pixelFormat==MTLPixelFormatRGBA16Float;
+        memcpy(uv+12,filter,sizeof filter);present_lut_domain(lut,uv+16);
+        if(lut) [args setTexture:lut->texture.gpuResourceID atIndex:1];
+        res_commit();
+        [en setRenderPipelineState:texture_blit_pipeline(dst.pixelFormat,0,lut ? 2 : 1)];
+    }
+    g_botw_present_lut[uv_i]=lut;
+#endif
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     MTLViewport ovp; float fuv[8];
     [en setRenderPipelineState:g_blit_pso];
@@ -17555,7 +17751,11 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     /* TOTK: whole-window shots (wshot, TOTK_WINDOW_SHOT) copy the drawable itself after the present has drawn into it: what
        the screen shows, MetalFX output upscale and boxes included (grab_present re-renders only for TOTK_PRESENT_SKIP). */
     void (^grab)(CGImageRef) = nil; NSString *grab_src = nil;
+    int grab_filter=0;
     if (g_grab_cb && interp < 0) { pthread_mutex_lock(&g_shotq_mu); grab = g_grab_cb; g_grab_cb = nil;
+#ifdef GAME_BOTW190
+        grab_filter=g_botw_grab_filter;g_botw_grab_filter=0;
+#endif
         if (g_grab_src_path[0]) { grab_src = @(g_grab_src_path); g_grab_src_path[0] = 0; } pthread_mutex_unlock(&g_shotq_mu); }
     /* TOTK_PRESENT_SKIP=1 (measurement only): never take a drawable, so the render pipeline's own frame rate shows (the window
        does not update). */
@@ -17581,16 +17781,25 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     const int *vr_crop = crop; id<MTLTexture> vr_src = interp < 0 ? vr_picture(cb, src, &vr_crop) : nil;   // the MetalFX picture modes: MetalFX's, twice as large
     int vr_slot = interp < 0 ? vr_source_encode(cb, vr_src, vr_crop, ticket) : -1;
     if (vr_slot >= 0) { static int added; if (!added) { [g_q4 addResidencySet:vr_residency()]; added = 1; } }
-    BOOL grab_hdr=dr.texture.pixelFormat==MTLPixelFormatRGBA16Float;
+    id<MTLTexture> grab_texture=grab_filter ? src : dr.texture;
+    BOOL grab_hdr=grab_texture.pixelFormat==MTLPixelFormatRGBA16Float;
+    BOOL grab_bgra=grab_hdr || grab_texture.pixelFormat==MTLPixelFormatBGRA8Unorm || grab_texture.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB;
+    CGRect grab_rect=CGRectMake(0,0,grab_texture.width,grab_texture.height);
+#ifdef GAME_BOTW190
+    if(grab_filter) {
+        if(crop && crop[2]>0 && crop[3]>0)grab_rect=CGRectMake(crop[0],crop[1],crop[2],crop[3]);
+        float picture[4];if(dm_aspect_region(0,picture))grab_rect=CGRectMake(grab_rect.origin.x+grab_rect.size.width*picture[0],grab_rect.origin.y+grab_rect.size.height*picture[1],grab_rect.size.width*picture[2],grab_rect.size.height*picture[3]);
+    }
+#endif
     size_t grab_bpp=grab_hdr?8:4;
-    id<MTLBuffer> grab_buf = nil; size_t grab_w = dr.texture.width, grab_h = dr.texture.height;
+    id<MTLBuffer> grab_buf = nil; size_t grab_w = grab_texture.width, grab_h = grab_texture.height;
     if (grab) {
         grab_buf = grab_w && grab_h ? [g_dev newBufferWithLength:grab_w * grab_h * grab_bpp options:MTLResourceStorageModeShared] : nil;
         if (grab_buf) {
             res_add(grab_buf); res_commit();   // resident before this command buffer runs (lesson 55)
             id<MTL4ComputeCommandEncoder> ge = [cb computeCommandEncoder];
             [ge barrierAfterQueueStages:MTLStageAll beforeStages:MTLStageAll visibilityOptions:MTL4VisibilityOptionDevice];
-            [ge copyFromTexture:dr.texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(grab_w, grab_h, 1)
+            [ge copyFromTexture:grab_texture sourceSlice:0 sourceLevel:0 sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(grab_w, grab_h, 1)
                        toBuffer:grab_buf destinationOffset:0 destinationBytesPerRow:grab_w * grab_bpp destinationBytesPerImage:grab_w * grab_h * grab_bpp];
             m4_end(ge);
         } else { MLOG("【红】整窗截图：%zux%zu 读回缓冲建不出", grab_w, grab_h); grab(NULL); grab = nil; }
@@ -17652,8 +17861,10 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
                     MLOG("[hdr] drawable readback: peak %.4f SDR-white units; %zu/%zu pixels above white; nonfinite %zu",peak,bright,w*h,bad);
                     pixels=sdr.bytes;
                 }
-                ctx = CGBitmapContextCreate((void *)pixels, w, h, 8, w * 4, cs, kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little);
-                img = ctx ? CGBitmapContextCreateImage(ctx) : NULL; }
+                ctx = CGBitmapContextCreate((void *)pixels, w, h, 8, w * 4, cs, grab_bgra ? kCGImageAlphaNoneSkipFirst | kCGBitmapByteOrder32Little : kCGImageAlphaNoneSkipLast);
+                img = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
+                if(img && grab_filter) { CGImageRef cropped=CGImageCreateWithImageInRect(img,grab_rect);CGImageRelease(img);img=cropped; }
+            }
             g(img);
             if (img) CGImageRelease(img); if (ctx) CGContextRelease(ctx); if (cs) CGColorSpaceRelease(cs);
             res_remove(buf); }]; }
@@ -18216,6 +18427,9 @@ void mtl_alloc_stats(uint64_t *waits, uint64_t *grown, int *n) { *waits = g_allo
 
 // ---------- TOTK standalone probes for the isolated GPU paths (runtime/gpu_path_probe.m) ----------
 static id<MTLBuffer> probe_buf(NSUInteger n) { id<MTLBuffer> b = [g_dev newBufferWithLength:n options:MTLResourceStorageModeShared]; if (!b) MDIE("probe buffer"); res_add(b); return b; }
+#ifdef GAME_BOTW190
+#include "botw_graphics_probe.inc"
+#endif
 /* widen_u8_gpu over sources at several byte offsets; returns the number of checked values, dies on a mismatch. */
 int mtl_probe_widen(void) {
     mtl_init();

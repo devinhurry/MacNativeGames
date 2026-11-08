@@ -10,7 +10,13 @@ typedef struct{const char *name;void *fn;const char *why;} GfxEntry;
 uint64_t g_t0_ns;
 
 uint64_t now_ns(void){return runtime_now_ns();}
-uint64_t guest_ns(void){return runtime_now_ns();}
+uint64_t guest_ns(void){
+#ifdef GAME_BOTW190
+ extern uint64_t runtime_touchnx_guest_now_ns(void);return runtime_touchnx_guest_now_ns();
+#else
+ return runtime_now_ns();
+#endif
+}
 void *module_of(const void *p){(void)p;return NULL;}
 static int (*fault_hook)(void *,int,void *);
 static void (*prepare_hook)(void *,size_t);

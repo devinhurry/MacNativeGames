@@ -13,6 +13,16 @@ from capstone import Cs, CS_ARCH_ARM64, CS_MODE_ARM
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'third_party/d2r'))
 from relr import decode_relr
+
+def parse_gate(line):
+    ret, kind, arg, original = line.split()
+    kinds = {'svc': 0, 'cntpct': 1, 'cntvct': 1, 'spin': 2, 'obs': 3}
+    assert kind in kinds, 'unknown gate kind'
+    arg = int(arg)
+    assert 0 <= arg <= 0xffffffff, 'gate argument out of range'
+    assert kind != 'obs' or 0 < (arg & 0xff) < 44, 'observation gate number out of range'
+    return dict(ret=int(ret, 0), timer=kinds[kind], arg=arg, original=int(original, 0))
+
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('--version', choices=('v0','v121','v143','botw160','botw190','dkb','pkp'), default='v0')
 version = parser.parse_args().version
@@ -83,10 +93,8 @@ for name in names:
             relocs.append(dict(where=where, kind=kind, symbol=si, addend=addend))
     gates = []
     for line in (ROOT / f'rewritten/{version}/{name}.gates.tsv').read_text().splitlines():
-        ret, kind, arg, original = line.split()
-        assert kind in ['cntpct', 'cntvct', 'svc', 'spin']
-        # timer: 0 svc, 1 cntpct / cntvct, 2 spin wait (patch_nso.py "Spin waits"; threads.c runtime_spin_wait)
-        gates.append(dict(ret=int(ret, 0), timer={'svc': 0, 'spin': 2}.get(kind, 1), arg=int(arg), original=int(original, 0)))
+        # timer: 0 svc, 1 counter, 2 spin wait, 3 observation (runtime/observation.c).
+        gates.append(parse_gate(line))
     gates.sort(key=lambda g: g['ret'])   # loader.c runtime_dispatch looks a return address up by binary search
     assert len({g['ret'] for g in gates}) == len(gates), 'duplicate gate return address'
     # Match each compiler's actual DT_INIT state load before decoding it.
@@ -109,7 +117,10 @@ for name in names:
     imm = (imm ^ (1 << 20)) - (1 << 20)
     ctor_flag = (at & ~4095) + (imm << 12) + ((w >> 10) & 0xfff)*4
     assert layout['DATA_OFF'] <= ctor_flag < layout['KEY_PAGE_OFF']
-    modules.append(dict(name=name, sha256=digest, size=len(image), ctor_flag=ctor_flag, layout=layout, tags=tags,
+    with (ROOT / f'extracted/{version}/exefs/{name}').open('rb') as original_nso:
+        nso_header = original_nso.read(256)
+    assert len(nso_header) == 256 and nso_header[:4] == b'NSO0', 'invalid original NSO header'
+    modules.append(dict(name=name, sha256=digest, build_id=nso_header[0x40:0x50].hex(), size=len(image), ctor_flag=ctor_flag, layout=layout, tags=tags,
                         symbols=symbols, relocs=relocs, gates=gates))
 
 # Find main's ORIGINAL PLT stub addressing the relocated GetSystemTick slot.
@@ -132,7 +143,7 @@ main['probe_slot'] = slot
 # runtime-tables.bin in the layouts of runtime/loader.c load_tables: a 64-byte header, one 208-byte record per module, each
 # module's symbols, relocations and gates (24 bytes each, 8-byte aligned), then the symbol names.
 HEADER, RECORD = 64, 208
-strings, arrays, records = bytearray(), bytearray(), []
+strings, arrays, records = bytearray(b'\0'), bytearray(), []
 def place(blob):
     arrays.extend(bytes(-len(arrays) % 8))
     arrays.extend(blob)
@@ -147,10 +158,12 @@ for m in modules:
     relocs = b''.join(struct.pack('<QIIq', r['where'], r['kind'], r['symbol'], r['addend']) for r in m['relocs'])
     gates = b''.join(struct.pack('<QQII', g['ret'], g['original'], int(g['timer']), g['arg']) for g in m['gates'])
     l, t = m['layout'], m['tags']
+    build_id_offset = len(strings)
+    strings.extend(m['build_id'].encode('ascii') + b'\0')
     records.append(struct.pack('<16s72s13Q4I', m['name'].encode(), m['sha256'].encode(), m['size'], l['TEXT_END'], l['RO_OFF'],
                                l['DATA_OFF'], l['PATCH_OFF'] % 2**64, l['KEY_PAGE_OFF'], t.get(12, 0), m['ctor_flag'], t.get(25, 0),
                                t.get(27, 0), place(symbols), place(relocs), place(gates), len(m['symbols']), len(m['relocs']),
-                               len(m['gates']), 0))
+                               len(m['gates']), build_id_offset))
 arrays.extend(bytes(-len(arrays) % 8))
 strings_offset = HEADER + RECORD * len(modules) + len(arrays)
 size = strings_offset + len(strings)

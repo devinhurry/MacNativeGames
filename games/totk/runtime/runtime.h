@@ -6,7 +6,7 @@ typedef struct { uint64_t where; unsigned kind, symbol; int64_t addend; } Reloc;
 typedef struct { const char *name; uint64_t value, size; unsigned defined, binding, type; } Symbol;
 typedef struct { uint64_t ret, original; unsigned timer, arg; } Gate;
 typedef struct {
- const char *name, *digest; size_t file_size, size;
+ const char *name, *digest, *build_id; size_t file_size, size;
  uint64_t text_end, ro_off, data_off, patch_off, key_off, init, ctor_flag, init_array, init_size;
  const Symbol *symbols; unsigned nsym; const Reloc *relocs; unsigned nreloc;
  const Gate *gates; unsigned ngate; unsigned *hash, hash_mask;
@@ -62,6 +62,7 @@ uint8_t *runtime_module_base(const char *name);   /* runtime/loader.c: "main", "
 uint64_t runtime_module_permission(uint64_t address,uint64_t size,unsigned permission);
 uint64_t runtime_module_lock_permission(uint64_t address,uint64_t size,unsigned mask,unsigned attribute);
 int runtime_module_query(uint64_t address,uint64_t *base,uint64_t *size,unsigned *state,unsigned *permission,unsigned *attribute);
+int runtime_guest_memory_contains(uintptr_t address); /* mapped guest heap, alias, stack or readable module memory */
 void runtime_oe_push_message(uint32_t message);
 void hle_bind_system_event(void *event, int autoclear);
 uint64_t runtime_svc(unsigned num, uint64_t *regs, const char *module, uint64_t offset);
@@ -178,6 +179,7 @@ void runtime_gamepad_focus(int on);             /* Mac window focus, independent
 void runtime_gamepad_switch_left(void *controller, int x, int y);
 void runtime_gamepad_switch_right(void *controller, int x, int y);
 void runtime_gamepad_read(RuntimeGamepadState *out);
+void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch); /* BOTW: keep input origin until merging */
 extern int (*runtime_vr_pad)(int plain, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);   /* zeldaVR: set by gfx/nvn/totk_vr.m while VR runs (the Quest 3 controllers) */
 /* Mac software keyboard: exclusive controller capture; UI reads physical positions (controller_map.h),
    independent of gameplay remaps. Main-thread only. Closing waits for release before gameplay resumes. */
@@ -224,6 +226,7 @@ void runtime_mouse_release(void);                   /* main thread: buttons up, 
 void runtime_capture_set_hook(void (*hook)(void));
 void runtime_gamepad_switch_capture(void *controller, int pressed);   /* Switch 0x30 report: 1 while the button is down (any queue) */
 void runtime_touch_pad_set(const RuntimeGamepadState *state);   /* on-screen touch controls (iOS) */
+void runtime_touch_pad_cancel_latch(uint64_t buttons); /* cancel pending virtual presses without dropping physical edges */
 int runtime_phone_fps(void);                /* d2r_gfx hle_nvn.c, iPhone / iPad: 30 while held at 30 (TOTK_PHONE_FPS), else 60 */
 void runtime_phone_fps_set(int fps);        /* 30 holds 30, anything else up to 60: the touch controls' button, at once */
 /* Controller rumble and motion (opt-in TOTK_RUMBLE=1 / TOTK_GYRO=1): the game's hid side in runtime/hid_feedback.c, the
@@ -257,6 +260,7 @@ void runtime_triggers_choose(int on);
 void runtime_triggers_release(void);   /* the game ends (atexit, and the window's close, whose _exit skips it): both triggers off */
 int runtime_motion_read(RuntimeMotionState *out, int max);   /* newest first; 0 = no motion now */
 void runtime_motion_start(void);   /* the game (re)started its sensor: angle and direction start over */
+void runtime_motion_feed_device(const double acc_g[3],const double gyro_rad_s[3],uint64_t now_ns);
 void runtime_motion_feed(const double acc_g[3], const double gyro_rad_s[3], uint64_t now_ns);   /* runtime/motion_fusion.c */
 int runtime_motion_axes(const char *spec);   /* TOTK_GYRO_AXES ("-x,y,-z"): 1 set, 0 unset, -1 malformed */
 void runtime_motion_deadzone_default(double deg_s);   /* when TOTK_GYRO_DEADZONE is unset: 1.2 for HID motion, else 0 */

@@ -1,4 +1,54 @@
 #import "touch_pad.h"
+#if defined(GAME_BOTW190)
+#import "botw_touch/DmLayout.h"
+#import "botw_touch/BotwTouchSurface.h"
+#include "../../runtime/botw_touch/front.h"
+void dm_gamepad_geometry_changed(UIInterfaceOrientation orientation);
+void dm_gamepad_surface_changed(void);
+void dm_gamepad_refresh_touch_settings(void);
+@implementation TOTKTouchPad {
+    UIView *controls;
+    CGRect division, previousBounds;
+}
+- (instancetype)initWithFrame:(CGRect)frame {
+    if((self=[super initWithFrame:frame])) {
+        self.backgroundColor=UIColor.clearColor;self.multipleTouchEnabled=YES;
+        division=CGRectNull;previousBounds=CGRectZero;
+        controls=dm_gamepad_view(self.bounds);
+        controls.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight;
+        [self addSubview:controls];
+        NSNotificationCenter *center=NSNotificationCenter.defaultCenter;
+        [center addObserver:self selector:@selector(clearTouches:) name:UIApplicationWillResignActiveNotification object:nil];
+        [center addObserver:self selector:@selector(refreshTouches:) name:UIApplicationDidBecomeActiveNotification object:nil];
+        [self setNeedsUpdateConstraints];
+    }
+    return self;
+}
+- (void)clearTouches:(NSNotification *)note { (void)note;dm_gamepad_reset(); }
+- (void)refreshTouches:(NSNotification *)note { (void)note;dm_gamepad_refresh_touch_settings();[self setNeedsLayout]; }
+- (void)updateConstraints {
+    CGRect next=dm_touch_division(self);
+    if(!CGRectEqualToRect(next,division)){division=next;[self setNeedsLayout];}
+    [super updateConstraints];
+}
+- (void)safeAreaInsetsDidChange { [super safeAreaInsetsDidChange];[self setNeedsUpdateConstraints];[self setNeedsLayout]; }
+- (void)layoutSubviews {
+    [super layoutSubviews];CGRect b=self.bounds;
+    if(CGRectIsEmpty(b))return;
+    float before[4],after[4];dm_aspect_region(1,before);
+    dm_aspect_set_display(b.size.width/b.size.height);
+    dm_aspect_set_seated(CGRectIsNull(division)?0:(CGRectGetMinY(division)-CGRectGetMinY(b))/b.size.height,
+                         CGRectIsNull(division)?0:(CGRectGetMaxY(division)-CGRectGetMinY(b))/b.size.height);
+    dm_aspect_region(1,after);
+    UIEdgeInsets safe=self.safeAreaInsets;
+    dm_aspect_set_safe_area(b.size.width,b.size.height,safe.left,safe.top,safe.right);
+    if(!CGRectEqualToRect(b,previousBounds)||memcmp(before,after,sizeof before))dm_gamepad_surface_changed();
+    previousBounds=b;controls.frame=b;
+    dm_gamepad_arrange(controls,(DmLayout){.game=b,.controls=b,.separated=!CGRectIsNull(division)});
+    if(self.window.windowScene)dm_gamepad_geometry_changed(self.window.windowScene.effectiveGeometry.interfaceOrientation);
+}
+@end
+#else
 #import "device_motion.h"
 #import <GameController/GameController.h>
 #include <math.h>
@@ -252,3 +302,4 @@ static void draw_stick(CGContextRef c, CGPoint o, CGPoint p, CGFloat r) {
     CGSize z = [rate sizeWithAttributes:small]; [rate drawAtPoint:CGPointMake(f.x - z.width / 2, f.y - z.height / 2) withAttributes:small];
 }
 @end
+#endif

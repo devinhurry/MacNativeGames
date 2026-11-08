@@ -1904,6 +1904,10 @@ def step_app(tree, out, logs, *, version="v0", game='totk', game_data='app', gam
     import plistlib
     (tmp / 'Contents/Info.plist').write_bytes(plistlib.dumps(info))
     (tmp / 'Contents/PkgInfo').write_bytes(b'APPL????')
+    if version == 'botw190':
+        touchnx = Path(os.environ.get('TOUCHNX_ROOT', Path(__file__).resolve().parent.parent / 'touchnx')).resolve()
+        run([sys.executable, touchnx / 'tools/stage_resources.py', '--game', 'botw190', '--platform', 'mac', '--bundle', tmp / 'Contents/Resources',
+             '--romfs', tree / 'extracted/botw190/romfs'], logs / 'touchnx-ui-resources.log')
     sign_app(tmp, logs)  # A failed seal must not remove the previous working app.
     wait_until_closed(out, '4/4 app: ')
     if install_app(tmp, out):
@@ -2586,6 +2590,8 @@ def parse_args(argv):
     ap.add_argument('--ios-game-data', choices=('app', 'documents'), default='app',
                     help='iOS: carry the 17 GB RomFS image in the IPA (default), or leave it out for the app\'s Documents/GameData '
                          '(ios/tools/install_device.py --game-data copies it there once; later builds install in minutes)')
+    ap.add_argument('--reuse-graphics', type=Path, help='TouchNX BOTW 1.9.0 iOS: reuse native .pack.000, a seed folder, or an older .graphics package')
+    ap.add_argument('--skip-romfs-package', action='store_true', help='TouchNX BOTW 1.9.0 iOS: only update the IPA using verified game-data requirements')
     ap.add_argument('--device-gpu', action='append', metavar='ARCH',
                     help='iOS: compile the pipeline archive on this Mac for this GPU (applegpu_g14p for an iPhone 14; repeat for '
                          'more; none: no archive). Default: the GPUs of the iPhones / iPads on the cable. The first start then '
@@ -2629,6 +2635,8 @@ def parse_args(argv):
 
 
 def main(argv):
+    touchnx = Path(__file__).resolve().parent.parent / 'touchnx'
+    if touchnx.is_dir(): os.environ.setdefault('TOUCHNX_ROOT', str(touchnx))
     args = parse_args(argv)
     if args.game.expanduser().is_dir():   # a Switch 2 dump folder
         return main_ns2(args, args.game.expanduser().resolve())
@@ -2693,6 +2701,10 @@ def main(argv):
     # The game decides the platforms, the work folder and the disk space needed, so it is identified before those checks.
     tree = prepare_work(work, py, logs)
     which = identify_game(tree, game, keys, logs)
+    if os.environ.get('TOUCHNX_MNG_GAME') and os.environ['TOUCHNX_MNG_GAME'] != which:
+        raise BuildError(f'TouchNX selected {os.environ["TOUCHNX_MNG_GAME"]}, but the input is {which}')
+    if (args.reuse_graphics or args.skip_romfs_package) and (which != 'botw' or args.platform != 'ios'):
+        raise BuildError('resource-package reuse needs a BOTW 1.9.0 iOS build')
     if args.native_5k and which not in ('totk', 'botw'):
         raise BuildError('--native-5k is only available for Tears of the Kingdom 1.4.3 and Breath of the Wild on Mac')
     if kind == 'nsp' and which != 'botw' and not fonts_given:   # only Breath of the Wild's fonts passed the check above
@@ -2731,7 +2743,15 @@ def main(argv):
         if dlcs and not update:
             raise BuildError('a Breath of the Wild card image holds its own add-on content, so leave out --dlc (or pass the base NSP '
                              'as the game file with --update <update.nsp>)')
+        if os.environ.get('TOUCHNX_MNG_VERSION') and os.environ['TOUCHNX_MNG_VERSION'] != version:
+            raise BuildError(f'TouchNX selected {os.environ["TOUCHNX_MNG_VERSION"]}, but the input is {version}')
         expected = VERSIONS[version]
+        if version == 'botw190':
+            APPS['botw'] = ('TouchNX BOTW MNG', 'app.touchnx.botw.macnativegames', 'TouchNX BOTW')
+            if not args.out:
+                out = game.parent / f'{APPS["botw"][0]}.{"ipa" if args.platform == "ios" else "app"}'
+        elif args.reuse_graphics or args.skip_romfs_package:
+            raise BuildError('resource-package reuse needs BOTW 1.9.0')
         if shutil.disk_usage(existing_volume_path(work.parent if work.parent.exists() else game.parent)).free / 2**30 < 22 and \
                 not (work / f'totk/extracted/{version}/romfs/romfs.bin').exists():
             raise BuildError('needs about 22 GB free for the work folder (the app itself is an APFS clone of it when on the same volume)')
@@ -2753,7 +2773,8 @@ def main(argv):
             say('native 5K: ' + ('on (5120x2880 canvas and scene)' if native_5k else 'off'))
         step_code_botw(tree, botw, update or game, keys, env, logs, version=version, mod=code_mod)
         step_data_botw(tree, botw, game, keys, logs, version=version, update=update, dlc=dlcs, firmware=firmware, shared_fonts=shared_fonts)
-        step_shaders_botw(tree, botw, logs, version=version)
+        if not args.reuse_graphics:
+            step_shaders_botw(tree, botw, logs, version=version)
         if not device_app:   # the Mac app's metallibs; build_ipa.py compiles the device's own (6 of a 21-minute iPhone build, 2026-10-28)
             step_shader_libs(tree, logs, version=version)
         # The work folder's copy of games/botw (prepare_work), relative: make splits a path with spaces into several targets
@@ -2763,12 +2784,17 @@ def main(argv):
             build_device_translator(tree, logs)
             run([py, 'ios/tools/build_ipa.py', '--tree', tree, '--out', out, '--version', version,
                  '--logs', logs, '--app-name', APPS['botw'][2], '--bundle-id', APPS['botw'][1],
+                 *(['--reuse-graphics', args.reuse_graphics.expanduser().resolve()] if args.reuse_graphics else []),
+                 *(['--skip-romfs-package'] if args.skip_romfs_package else []),
                  *(['--image-outside'] if args.ios_game_data == 'documents' else []),
                  *[x for g in args.device_gpu or [] for x in ('--device-gpu', g)]], logs / 'build-ipa.log', cwd=tree, env=env)
             say_device_pipelines(logs)
             say(f'done in {(time.time() - t0) / 60:.0f} min: {out}')
-            say('Install it with games/totk/ios/tools/install_device.py' + (f' --game-data {tree}/extracted/{version}/romfs/romfs.bin'
-                if args.ios_game_data == 'documents' else '') + '; saves and the shader cache stay in the app\'s Documents.')
+            if version == 'botw190':
+                say('Sideload the IPA, then use the TouchNX launcher to import its .graphics and -RomFS.img packages. Saves stay in this app\'s Documents.')
+            else:
+                say('Install it with games/totk/ios/tools/install_device.py' + (f' --game-data {tree}/extracted/{version}/romfs/romfs.bin'
+                    if args.ios_game_data == 'documents' else '') + '; saves and the shader cache stay in the app\'s Documents.')
             return
         step_app(tree, out, logs, version=version, game='botw', game_data=args.mac_game_data, game_data_folder=game_data_folder,
                  native_4k=native_4k, native_5k=native_5k if args.native_5k is not None else (False if args.native_4k is False else None))

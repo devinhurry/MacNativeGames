@@ -22,7 +22,7 @@
 
 static pthread_mutex_t gamepadLock = PTHREAD_MUTEX_INITIALIZER;
 static RuntimeGamepadState gamepadState;
-static uint64_t pressedEdges;
+static uint64_t pressedEdges, touchEdges;
 static RuntimeGamepadState textPad;
 static uint64_t textEdges;
 static _Atomic int textCapture;       /* gamepadLock: 1 UI owns input, 2 wait for release, 0 game */
@@ -1099,7 +1099,7 @@ void runtime_gamepad_clear(void) {
     gamepadState = (RuntimeGamepadState){0};
     gamepadRawLeftAt = 0; gamepadRawRightAt = 0;
     gamepadNativeLx = gamepadNativeLy = 0;
-    pressedEdges = 0; textEdges = 0; textPad = (RuntimeGamepadState){0};
+    pressedEdges = touchEdges = 0; textEdges = 0; textPad = (RuntimeGamepadState){0};
     settingsShortcutDown = settingsShortcutPending = 0;
     captureDown = captureSeen = 0;   /* a button held at focus loss must not shoot on the way back */
     mouse_look_reset(&mouseLook); mouseRX = mouseRY = 0;
@@ -1112,9 +1112,12 @@ void runtime_gamepad_clear(void) {
 static RuntimeGamepadState touchState;
 void runtime_touch_pad_set(const RuntimeGamepadState *s) {
     pthread_mutex_lock(&gamepadLock);
-    pressedEdges |= s->buttons & ~touchState.buttons;
+    touchEdges |= s->buttons & ~touchState.buttons;
     touchState = *s;
     pthread_mutex_unlock(&gamepadLock);
+}
+void runtime_touch_pad_cancel_latch(uint64_t buttons) {
+    pthread_mutex_lock(&gamepadLock); touchEdges &= ~buttons; pthread_mutex_unlock(&gamepadLock);
 }
 
 void runtime_gamepad_settings_enable(int enabled) {
@@ -1133,11 +1136,15 @@ int runtime_gamepad_settings_requested(void) {
 void runtime_gamepad_text_capture(int on) {
     pthread_mutex_lock(&gamepadLock);
     textCapture = on ? 1 : 2;
-    textEdges = pressedEdges = 0;
+    textEdges = pressedEdges = touchEdges = 0;
     pthread_mutex_unlock(&gamepadLock);
     /* UI actions must not start persistent gameplay tap/toggle bindings. */
     memset(tapUntil, 0, sizeof tapUntil); memset(toggleOn, 0, sizeof toggleOn);
     memset(toggleMoved, 0, sizeof toggleMoved);
+#if TARGET_OS_OSX && defined(GAME_BOTW190)
+    extern void runtime_botw_touch_preview_focus(int on);
+    dispatch_async(dispatch_get_main_queue(), ^{ runtime_botw_touch_preview_focus(!on); });
+#endif
     refresh_gamepads();
 }
 int runtime_gamepad_game_input(void) { return !atomic_load(&textCapture); }   /* the bow thread (gamepad_feedback.m) */
@@ -1168,7 +1175,7 @@ void runtime_gamepad_text_read(RuntimeGamepadState *out) {
     vr_pad_merge(out, 1);   /* the settings panel and the text keyboard: the Quest buttons by name */
     pthread_mutex_unlock(&gamepadLock);
 }
-void runtime_gamepad_read(RuntimeGamepadState *out) {
+static void gamepad_read(RuntimeGamepadState *out, RuntimeGamepadState *touch) {
     pthread_mutex_lock(&gamepadLock);
     *out = gamepadState;
     if (gamepadRawLeftAt && runtime_now_ns() - gamepadRawLeftAt > 250000000ULL) {
@@ -1177,18 +1184,27 @@ void runtime_gamepad_read(RuntimeGamepadState *out) {
     if (gamepadRawRightAt && runtime_now_ns() - gamepadRawRightAt > 250000000ULL) {   /* the HID reports stopped: GameController's right stick */
         out->rx = gamepadNativeRx; out->ry = gamepadNativeRy;
     }
-    out->buttons |= touchState.buttons | pressedEdges;
-    out->lx = stronger_axis(out->lx, touchState.lx); out->ly = stronger_axis(out->ly, touchState.ly);
-    out->rx = stronger_axis(out->rx, touchState.rx); out->ry = stronger_axis(out->ry, touchState.ry);
-    out->rx = stronger_axis(out->rx, mouseRX); out->ry = stronger_axis(out->ry, mouseRY);
-    if (touchState.connected) out->connected = 1;
+    out->buttons |= pressedEdges;
+    RuntimeGamepadState virtual=touchState;
+    virtual.buttons |= touchEdges;
+    virtual.rx = stronger_axis(virtual.rx, mouseRX); virtual.ry = stronger_axis(virtual.ry, mouseRY);
+    if (!touch) {
+        out->buttons |= virtual.buttons;
+        out->lx = stronger_axis(out->lx, virtual.lx); out->ly = stronger_axis(out->ly, virtual.ly);
+        out->rx = stronger_axis(out->rx, virtual.rx); out->ry = stronger_axis(out->ry, virtual.ry);
+        if (virtual.connected) out->connected = 1;
+    }
     vr_pad_merge(out, 0);   /* zeldaVR: the Quest 3 controllers, merged like the touch screen */
-    pressedEdges = 0;
+    pressedEdges = touchEdges = 0;
     if (textCapture) {
         RuntimeGamepadState held = text_state_locked();
         if (textCapture == 2 && !held.buttons && !held.lx && !held.ly && !held.rx && !held.ry)
             textCapture = 0;
         *out = (RuntimeGamepadState){.connected = out->connected};
+        virtual = (RuntimeGamepadState){0};
     }
+    if (touch) *touch=virtual;
     pthread_mutex_unlock(&gamepadLock);
 }
+void runtime_gamepad_read(RuntimeGamepadState *out) { gamepad_read(out,NULL); }
+void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch) { gamepad_read(physical,touch); }

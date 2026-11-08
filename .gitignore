@@ -28,3 +28,6 @@ games/totk/tools/totk_xlate/bin/
 games/totk/scripts/shader_inventory/obj/
 games/totk/scripts/shader_inventory/bin/
 ultracode.md
+
+# Local BOTW button icons extracted from the player's game.
+games/totk/app/botw/resources/dm/touch_*.png

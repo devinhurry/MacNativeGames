@@ -11,7 +11,9 @@ targets:
     type: application
     platform: iOS
     sources:
-      - Sources
+      - path: Sources
+        excludes:
+          - botw_touch
       - Settings.bundle   # the Settings app pane; options stored in NSUserDefaults
       - path: ../runtime
         excludes:
@@ -19,6 +21,7 @@ targets:
           - loader.c
           - game_patches_botw.c
           - game_patches_ns2.c
+          - botw_touch   # portable feature sources are tested independently until the frontend adapter is linked
       - path: ../third_party/d2r_gfx/gfx/nvn
       - path: ../third_party/d2r_gfx/gfx/tex
       - path: ../zeldaVR/gfx   # zeldaVR: the VR modules (empty on iOS; the build copies zeldaVR into the tree)

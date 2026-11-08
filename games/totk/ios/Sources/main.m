@@ -128,6 +128,12 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 - (void)pickCloudFolderThen:(void (^)(void))then;
 @end
 @implementation TOTKGameController
+#ifdef GAME_BOTW190
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+    extern NSUInteger dm_touch_editor_orientations(void);NSUInteger editor=dm_touch_editor_orientations();if(editor)return editor;
+    const char *portrait=getenv("DM_BOTW_PORTRAIT");return portrait && !strcmp(portrait,"1") ? UIInterfaceOrientationMaskAll : UIInterfaceOrientationMaskLandscape;
+}
+#endif
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
@@ -153,6 +159,10 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
         runtime_boot_status(zh ? "无法开始游戏" : "Cannot start the game", g_no_game_data.UTF8String);
         return;
     }
+#ifdef GAME_BOTW190
+    [self prepareAndStart];
+    return;
+#endif
     cloud_folder_forget_if_asked();
     if (g_pick_cloud_folder || [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_CLOUD_SAVE_PICK"]) {
         __weak TOTKGameController *weakSelf = self;
@@ -230,6 +240,10 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     };
     /* A run started by a script skips the start screen, which would wait for a tap: devicectl ... --environment-variables
        '{"TOTK_START_SCREEN":"0"}'. The Settings app's choices apply as they are (after PR #1174). */
+#ifdef GAME_BOTW190
+    extern void runtime_botw_present_launcher(UIViewController *,void (^)(void));
+    runtime_botw_present_launcher(self,start);return;
+#endif
     const char *screen = getenv("TOTK_START_SCREEN");
     if (screen && !strcmp(screen, "0")) start();
     else [self.view addSubview:[[TOTKStartView alloc] initWithFrame:self.view.bounds onStart:start]];
@@ -258,7 +272,9 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     [self startGame];
 }
 - (void)startGame {
+#ifndef GAME_BOTW190
     cloud_folder_apply();   // before the game thread: fs_host.c init reads TOTK_CLOUD_SAVE_FOLDER
+#endif
     /* Playback category (PR #97): plays with the ring / silent switch off and routes to the speaker. Without an active
        session the game's CoreAudio output stays on a null sink on iOS 27 ("no device sink in use"); activating it in
        didFinishLaunching blocked the main thread before the log file was opened. Interruptions: audio_observe. */
@@ -275,7 +291,9 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (BOOL)prefersStatusBarHidden { return YES; }
+#ifndef GAME_BOTW190
 - (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+#endif
 @end
 
 /* iOS 27 ends apps linked against its SDK that keep the window in the app delegate (UIKit traps in
@@ -559,13 +577,19 @@ static void apply_settings(void) {
     BOOL debugLog = debugEnv ? (*debugEnv && strcmp(debugEnv,"0")) : [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_DEBUG_LOG"];
     if (debugLog) { if (freopen(log.fileSystemRepresentation,"w",stderr)) setvbuf(stderr,NULL,_IOLBF,0); setenv("TOTK_UW_CATALOG","1",0); }
     else { [fm removeItemAtPath:log error:nil]; if (freopen("/dev/null","w",stderr)) setvbuf(stderr,NULL,_IOFBF,1<<16); }
+    if(debugLog){
+        setenv("TOUCHNX_RESOURCE_TIMING","1",0);setenv("TOTK_FS_TIMING","1",0);
+        setenv("TOUCHNX_GPU_TIMING","1",0);
+    }
     outputResolutionFromEnvironment=getenv("TOTK_OUTPUT_RES")!=NULL;
     apply_settings();
     setenv("TOTK_ROMFS",[res stringByAppendingPathComponent:@"romfs"].fileSystemRepresentation,1);
     setenv("TOTK_GAME_DATA",[res stringByAppendingPathComponent:@"game-data"].fileSystemRepresentation,1);   // runtime/game_data.h
+    NSString *seedDir = [res stringByAppendingPathComponent:@"shader-seed"];
     /* The 17 GB image may live in Documents/GameData instead of the app (romfs.bin or romfs.bin.000, ...; ios/tools/
        install_device.py --game-data puts it there): a new build then installs without it, and reinstalling keeps it.
        Excluded from iCloud backups. The runtime still hashes it once against the build's pin (TOTK_ROMFS_PROOF_DIR). */
+#ifndef GAME_BOTW190
     NSString *gameData = [docs stringByAppendingPathComponent:@"GameData"];
     BOOL image = [fm fileExistsAtPath:[gameData stringByAppendingPathComponent:@"romfs.bin"]] ||
                  [fm fileExistsAtPath:[gameData stringByAppendingPathComponent:@"romfs.bin.000"]];
@@ -589,7 +613,6 @@ static void apply_settings(void) {
        folder in Documents/GameData once per content and writes shader-seed.txt last ("<folder>\n<fingerprint>"), so the app
        carries none and a new build installs in seconds. Read in place like the app's own (totk_shader_seed.h); folders of
        earlier seeds are removed in the background. Without either seed the game has no shaders: said on the screen. */
-    NSString *seedDir = [res stringByAppendingPathComponent:@"shader-seed"];
     NSArray<NSString *> *seedMark = [[NSString stringWithContentsOfFile:[gameData stringByAppendingPathComponent:@"shader-seed.txt"] encoding:NSUTF8StringEncoding error:nil] componentsSeparatedByString:@"\n"];
     NSString *pushedName = seedMark.count >= 2 && seedMark[1].length == 64 && [seedMark[0] hasPrefix:@"shader-seed-"] && ![seedMark[0] containsString:@"/"] ? seedMark[0] : nil;
     NSString *pushed = pushedName ? [gameData stringByAppendingPathComponent:pushedName] : nil;
@@ -609,6 +632,7 @@ static void apply_settings(void) {
                             : @"No shaders. Install the game again from the Mac with ios/tools/install_device.py (it copies them to the device).";
         fprintf(stderr, "[totk] no shader seed: %s\n", g_no_game_data.UTF8String);
     }
+#endif
 #if TARGET_OS_VISION
     setenv("TOTK_OPERATION_MODE","docked",1);
     setenv("TOTK_IOS_DRAWABLE_H","1080",0);

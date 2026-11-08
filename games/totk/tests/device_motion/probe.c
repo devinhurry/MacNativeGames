@@ -25,16 +25,17 @@ int main(void) {
     check(maps_to(ll, (double[3]){0, 1, 0}, 1, 0, 0), "landscape left: the device's top edge maps to the controller's right");
 
     const double v[3] = {0.3, -0.7, 0.2};
-    for (int i = 0; i < 2; i++) {
-        int o = i ? ll : lr;
+    const int orientations[]={lr,ll,DEVICE_MOTION_UI_PORTRAIT,DEVICE_MOTION_UI_PORTRAIT_UPSIDE_DOWN};
+    for (int i = 0; i < 4; i++) {
+        int o = orientations[i];
         double out[3]; device_motion_to_landscape(o, v, out);
         check(near(out[2], v[2], 1e-12), "the axis out of the screen passes through unchanged");
         check(near(sqrt(out[0]*out[0] + out[1]*out[1] + out[2]*out[2]), sqrt(v[0]*v[0] + v[1]*v[1] + v[2]*v[2]), 1e-12),
               "a length is kept: it is a rotation, so acceleration and rotation rate map alike");
     }
 
-    for (int i = 0; i < 2; i++) {
-        int o = i ? ll : lr;
+    for (int i = 0; i < 4; i++) {
+        int o = orientations[i];
         double m[3][3];
         for (int c = 0; c < 3; c++) {
             double u[3] = {0, 0, 0}; u[c] = 1, device_motion_to_landscape(o, u, m[c]);   // the images of the unit axes are the columns
@@ -44,8 +45,11 @@ int main(void) {
         check(near(det, 1, 1e-12), "determinant +1: a proper rotation, no mirror (both orientations)");
     }
 
-    check(maps_to(1, (double[3]){0.3, -0.7, 0.2}, 0.7, 0.3, 0.2),
-          "an orientation we do not handle (portrait) falls back to landscape right");
+    check(maps_to(DEVICE_MOTION_UI_PORTRAIT, (double[3]){0.3,-0.7,0.2},0.3,-0.7,0.2),
+          "portrait and view-relative Core Motion samples already use the picture's axes");
+    check(maps_to(DEVICE_MOTION_UI_PORTRAIT_UPSIDE_DOWN, (double[3]){0.3,-0.7,0.2},-0.3,0.7,0.2),
+          "upside-down portrait turns both in-plane axes");
+    check(maps_to(0, (double[3]){0.3,-0.7,0.2},0.7,0.3,0.2),"unknown orientation keeps the existing landscape fallback");
 
     printf("{\"status\":\"%s\",\"probe\":\"device-motion\",\"checked\":%d,\"failures\":%d}\n", failures ? "fail" : "pass", checked, failures);
     return failures != 0;

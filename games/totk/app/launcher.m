@@ -347,6 +347,10 @@ int runtime_app_launch(int argc, char **argv, char ***boot) {
         NSString *home = NSHomeDirectory();
         NSString *data = [home stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/" GAME_FOLDER];   /* game_version.h: TOTK, BotW */
         NSString *logs = [home stringByAppendingPathComponent:@"Library/Logs/MacNativeGames"];
+#ifdef GAME_BOTW190
+        data=[home stringByAppendingPathComponent:@"Library/Application Support/TouchNX/macnativegames/BotW"];
+        logs=[home stringByAppendingPathComponent:@"Library/Logs/TouchNX/macnativegames"];
+#endif
         /* Folders the environment already names are kept (open --env TOTK_PROFILE_DIR=... runs a test on a save copy,
            TOTK_GAME_SLOT_DIR shares one game slot with another build of the game: one game at a time on the Mac). */
         NSString *(^env_or)(const char *, NSString *) = ^NSString *(const char *name, NSString *fallback) {
@@ -497,6 +501,13 @@ int runtime_app_launch(int argc, char **argv, char ***boot) {
             dup2(fileno(lf), STDERR_FILENO);
             fclose(lf);
         }
+#ifdef GAME_BOTW190
+        setenv("DM_SAVES_ROOT",profile.fileSystemRepresentation,1);
+        NSString *launcher=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/launcher.json"];
+        setenv("DM_LAUNCHER_FILE",launcher.fileSystemRepresentation,1);
+        extern int dm_mac_launcher(void);if(!dm_mac_launcher())return 0;
+        extern void runtime_botw_launcher_apply_startup(void);runtime_botw_launcher_apply_startup();
+#endif
         setenv("TOTK_UPDATE_LAUNCHER", NSBundle.mainBundle.executablePath.fileSystemRepresentation, 1);
         static char *arguments[4] = {NULL, "rewritten/" TOTK_GAME_DIR, "boot", NULL};
         arguments[0] = argv[0];

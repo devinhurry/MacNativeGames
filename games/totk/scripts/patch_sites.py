@@ -346,7 +346,8 @@ def rewriter_sites(build_id):
             for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*[\'"]([0-9a-fA-F]*)[\'"]', body):
                 found.append(Site('patch_nso.py CUTS', int(match.group(1), 16), len(match.group(2)) // 2))
         elif table == 'OBS':     # (offset, observation number, original word, reason)
-            for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*\d+[ \t]*,', body):
+            # An observation can encode its camera parameter above the low byte (42 | 1 << 8).
+            for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*[^,\n]+,', body):
                 found.append(Site('patch_nso.py OBS', int(match.group(1), 16), 4))
         else:                    # (offset a, word a, offset b, word b, register, key, reason)
             for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*[\'"][0-9a-fA-F]+[\'"]'
