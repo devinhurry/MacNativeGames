@@ -4,11 +4,10 @@
 
 void totk_device_motion_note_touch(void);      /* the touch layer saw a finger: the phone's gyro takes the aiming over */
 
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
 #import <UIKit/UIKit.h>
 void totk_phone_motion_start(void);
 void totk_device_motion_bind_view(UIView *view); /* iOS 27+: Core Motion follows this display's view axes */
 void totk_device_motion_geometry_changed(UIInterfaceOrientation orientation);
-const char *dm_motion_source_get(void);
 void totk_phone_motion_source_changed(void);
 #endif

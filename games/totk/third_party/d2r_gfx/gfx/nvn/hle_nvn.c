@@ -145,12 +145,9 @@ HLE_FORCE("nvnBootstrapLoader", "NVN 图形接口整块换成宿主空设备（�
 #define B(x) ((x) & 0xff)
 
 #include "nvn_obj.h"
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_ui_scope.h>
-#else
-static inline p_draw tnx_mng_tag_draw(p_draw draw) { return draw; }
-static inline p_draw_idx tnx_mng_tag_draw_idx(p_draw_idx draw) { return draw; }
-#endif
+#define MNG_GFX_RECORD
+#include "nvn_extensions.h"
+#undef MNG_GFX_RECORD
 #include "totk_timeline.h"
 void mtl_args_stats(uint64_t *enc, uint64_t *reuse);
 
@@ -2347,16 +2344,16 @@ NVN(nvnCommandBufferSetStencilRef, void, NVNcommandBuffer *c, NVNface f, int v) 
 NVN(nvnCommandBufferSetPolygonOffsetClamp, void, NVNcommandBuffer *c, float fa, float un, float cl) {
     *REC(c, OP_POLY_OFFSET, p_poly_offset) = (p_poly_offset){fa, un, cl};
 }
-NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { *REC(c, OP_DRAW, p_draw) = tnx_mng_tag_draw((p_draw){pr, first, n, 0, 1}); }
+NVN(nvnCommandBufferDrawArrays, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n) { *REC(c, OP_DRAW, p_draw) = MNG_GFX_TAG_DRAW((p_draw){pr, first, n, 0, 1}); }
 NVN(nvnCommandBufferDrawArraysInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, int first, int n, int bi, int inst) {
     if (inst <= 0) return;   // NVN: zero instances draw nothing
-    *REC(c, OP_DRAW, p_draw) = tnx_mng_tag_draw((p_draw){pr, first, n, bi, inst});
+    *REC(c, OP_DRAW, p_draw) = MNG_GFX_TAG_DRAW((p_draw){pr, first, n, bi, inst});
 }
 NVN(nvnCommandBufferDrawElements, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib) {
-    *REC(c, OP_DRAW_IDX, p_draw_idx) = tnx_mng_tag_draw_idx((p_draw_idx){pr, it, n, 0, 0, 1, ib}); hw_fix(CB(c), 48);
+    *REC(c, OP_DRAW_IDX, p_draw_idx) = MNG_GFX_TAG_DRAW_INDEXED((p_draw_idx){pr, it, n, 0, 0, 1, ib}); hw_fix(CB(c), 48);
 }
 NVN(nvnCommandBufferDrawElementsBaseVertex, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib, int bv) {
-    *REC(c, OP_DRAW_IDX, p_draw_idx) = tnx_mng_tag_draw_idx((p_draw_idx){pr, it, n, bv, 0, 1, ib}); hw_fix(CB(c), 44);
+    *REC(c, OP_DRAW_IDX, p_draw_idx) = MNG_GFX_TAG_DRAW_INDEXED((p_draw_idx){pr, it, n, bv, 0, 1, ib}); hw_fix(CB(c), 44);
 }
 /* Indirect: the 20-byte record at ind is NVN's DrawElementsIndirectData {count, instances, first index, base vertex, base
    instance}, Metal's MTLDrawIndexedPrimitivesIndirectArguments; the GPU reads it when the draw runs, so a record an earlier
@@ -2365,10 +2362,10 @@ NVN(nvnCommandBufferDrawElementsBaseVertex, void, NVNcommandBuffer *c, NVNdrawPr
    instance}, Metal's MTLDrawPrimitivesIndirectArguments (nvn_mtl.m draw_inner). Pokemon Pokopia calls it; seedds/nxnative
    records it the same way (MIT). */
 NVN(nvnCommandBufferDrawArraysIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNbufferAddress ind) {
-    *REC(c, OP_DRAW, p_draw) = tnx_mng_tag_draw((p_draw){pr, 0, 0, 0, 1, 0, ind}); hw_fix(CB(c), 40);
+    *REC(c, OP_DRAW, p_draw) = MNG_GFX_TAG_DRAW((p_draw){pr, 0, 0, 0, 1, 0, ind}); hw_fix(CB(c), 40);
 }
 NVN(nvnCommandBufferDrawElementsIndirect, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, NVNbufferAddress ib, NVNbufferAddress ind) {
-    *REC(c, OP_DRAW_IDX, p_draw_idx) = tnx_mng_tag_draw_idx((p_draw_idx){pr, it, 0, 0, 0, 1, ib, ind}); hw_fix(CB(c), 48);
+    *REC(c, OP_DRAW_IDX, p_draw_idx) = MNG_GFX_TAG_DRAW_INDEXED((p_draw_idx){pr, it, 0, 0, 0, 1, ib, ind}); hw_fix(CB(c), 48);
 }
 #ifdef GAME_NS2
 /* NVN2 push constants: (command buffer, a word seen 0, byte offset, size, data); from seedds/nxnative a7bd05f4 (MIT).
@@ -2384,7 +2381,7 @@ NVN_NOPROTO(nvnCommandBufferPushComputeConstants, void, NVNcommandBuffer *c, uin
 #endif
 NVN(nvnCommandBufferDrawElementsInstanced, void, NVNcommandBuffer *c, NVNdrawPrimitive pr, NVNindexType it, int n, NVNbufferAddress ib,
     int bv, int bi, int inst) {
-    *REC(c, OP_DRAW_IDX, p_draw_idx) = tnx_mng_tag_draw_idx((p_draw_idx){pr, it, n, bv, bi, inst, ib}); hw_fix(CB(c), 44);   /* assumed: same 6-parameter draw macro as the base-vertex form (unverified) */
+    *REC(c, OP_DRAW_IDX, p_draw_idx) = MNG_GFX_TAG_DRAW_INDEXED((p_draw_idx){pr, it, n, bv, bi, inst, ib}); hw_fix(CB(c), 44);   /* assumed: same 6-parameter draw macro as the base-vertex form (unverified) */
 }
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) {
     // 跳板是尾跳（br），这里的返回地址就是游戏里的调用点

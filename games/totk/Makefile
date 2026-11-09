@@ -469,6 +469,7 @@ SAVE_BACKEND_SOURCE ?= runtime/cloud_save.m
 ifneq ($(MNG_BUILD_OPTIONS),)
 include $(MNG_BUILD_OPTIONS)
 endif
+BOTW190_INPUTS += $(MNG_BUILD_OPTIONS)
 
 GFX_OBJECTS_BOTW190 := $(addprefix build/gfx-botw190$(BOTW190_SUFFIX)/,$(addsuffix .o,$(GFX_SRC)))
 build/gfx-botw190$(BOTW190_SUFFIX)/%.o: % $(GFX_HEADERS) Makefile $(BOTW190_INPUTS)

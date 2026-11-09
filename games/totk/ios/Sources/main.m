@@ -11,8 +11,8 @@
 #include <unistd.h>
 #include <math.h>
 #include "runtime.h"
-#ifdef TOUCHNX_INTEGRATION
-#include <runtime/bridge.h>
+#ifdef MNG_APP_EXTENSIONS
+#include "app_extensions.h"
 #endif
 #include "game_version.h"   // GAME_FOLDER and TOTK_GAME_VERSION of this build (build_ipa.py's -D flags)
 #include "dmsh_chain.h"
@@ -131,9 +131,7 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 - (void)pickCloudFolderThen:(void (^)(void))then;
 @end
 @implementation TOTKGameController
-#ifdef TOUCHNX_INTEGRATION
-#include <ios/orientations.inc>
-#endif
+
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.view.backgroundColor = UIColor.blackColor;
@@ -159,7 +157,7 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
         runtime_boot_status(zh ? "无法开始游戏" : "Cannot start the game", g_no_game_data.UTF8String);
         return;
     }
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_APP_EXTENSIONS
     [self prepareAndStart];
     return;
 #endif
@@ -240,9 +238,8 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     };
     /* A run started by a script skips the start screen, which would wait for a tap: devicectl ... --environment-variables
        '{"TOTK_START_SCREEN":"0"}'. The Settings app's choices apply as they are (after PR #1174). */
-#ifdef TOUCHNX_INTEGRATION
-    extern void tnx_mng_present_launcher(UIViewController *,void (^)(void));
-    tnx_mng_present_launcher(self,start);return;
+#ifdef MNG_APP_EXTENSIONS
+    runtime_ios_present_launcher(self,start);return;
 #endif
     const char *screen = getenv("TOTK_START_SCREEN");
     if (screen && !strcmp(screen, "0")) start();
@@ -272,7 +269,7 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
     [self startGame];
 }
 - (void)startGame {
-#ifndef TOUCHNX_INTEGRATION
+#ifndef MNG_APP_EXTENSIONS
     cloud_folder_apply();   // before the game thread: fs_host.c init reads TOTK_CLOUD_SAVE_FOLDER
 #endif
     /* Playback category (PR #97): plays with the ring / silent switch off and routes to the speaker. Without an active
@@ -291,9 +288,13 @@ static void apply_display_settings(void);   // below, next to the pane helpers i
 }
 - (BOOL)prefersHomeIndicatorAutoHidden { return YES; }
 - (BOOL)prefersStatusBarHidden { return YES; }
-#ifndef TOUCHNX_INTEGRATION
-- (UIInterfaceOrientationMask)supportedInterfaceOrientations { return UIInterfaceOrientationMaskLandscape; }
+- (UIInterfaceOrientationMask)supportedInterfaceOrientations {
+#ifdef MNG_APP_EXTENSIONS
+    return runtime_ios_orientations();
+#else
+    return UIInterfaceOrientationMaskLandscape;
 #endif
+}
 @end
 
 /* iOS 27 ends apps linked against its SDK that keep the window in the app delegate (UIKit traps in
@@ -577,8 +578,8 @@ static void apply_settings(void) {
     BOOL debugLog = debugEnv ? (*debugEnv && strcmp(debugEnv,"0")) : [NSUserDefaults.standardUserDefaults boolForKey:@"TOTK_DEBUG_LOG"];
     if (debugLog) { if (freopen(log.fileSystemRepresentation,"w",stderr)) setvbuf(stderr,NULL,_IOLBF,0); setenv("TOTK_UW_CATALOG","1",0); }
     else { [fm removeItemAtPath:log error:nil]; if (freopen("/dev/null","w",stderr)) setvbuf(stderr,NULL,_IOFBF,1<<16); }
-#ifdef TOUCHNX_INTEGRATION
-    if(debugLog){setenv("TOUCHNX_RESOURCE_TIMING","1",0);setenv("TOTK_FS_TIMING","1",0);}
+#ifdef MNG_APP_EXTENSIONS
+    runtime_ios_environment(debugLog);
 #endif
     outputResolutionFromEnvironment=getenv("TOTK_OUTPUT_RES")!=NULL;
     apply_settings();
@@ -588,7 +589,7 @@ static void apply_settings(void) {
     /* The 17 GB image may live in Documents/GameData instead of the app (romfs.bin or romfs.bin.000, ...; ios/tools/
        install_device.py --game-data puts it there): a new build then installs without it, and reinstalling keeps it.
        Excluded from iCloud backups. The runtime still hashes it once against the build's pin (TOTK_ROMFS_PROOF_DIR). */
-#ifndef TOUCHNX_INTEGRATION
+#ifndef MNG_APP_EXTENSIONS
     NSString *gameData = [docs stringByAppendingPathComponent:@"GameData"];
     BOOL image = [fm fileExistsAtPath:[gameData stringByAppendingPathComponent:@"romfs.bin"]] ||
                  [fm fileExistsAtPath:[gameData stringByAppendingPathComponent:@"romfs.bin.000"]];

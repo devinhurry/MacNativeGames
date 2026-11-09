@@ -188,14 +188,13 @@ static void bias_sample(const double acc[3], const double gyro[3], uint64_t now)
     }
     win_n = 0;
 }
-#ifdef TOUCHNX_INTEGRATION
-#include <runtime/motion_policy.inc>
-#endif
 static void motion_feed_source(const double raw_acc[3],const double raw_gyro[3],uint64_t now,int device) {
     double acc[3], gyro[3];
     pthread_mutex_lock(&lock);
-#ifdef TOUCHNX_INTEGRATION
-#include <runtime/motion_sample.inc>
+#ifdef MNG_MOTION_FILTER
+    int action=runtime_filter_motion_source(device,runtime_now_ns());
+    if(!action){pthread_mutex_unlock(&lock);return;}
+    if(action==2){restart=1;last_ns=0;win_n=0;if(bias_mode!=2){bias_known=0;memset(bias,0,sizeof bias);}}
 #else
     (void)device;
 #endif

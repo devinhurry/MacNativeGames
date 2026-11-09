@@ -7,8 +7,8 @@
 #include <stdatomic.h>
 #include "runtime.h"
 #include "totk_ui_lang.h"
-#if defined(TOUCHNX_INTEGRATION) && __has_include(<adapters/macnativegames/ios/boot_overlay.h>)
-#include <adapters/macnativegames/ios/boot_overlay.h>
+#ifdef MNG_APP_EXTENSIONS
+#include "app_extensions.h"
 #endif
 static CAMetalLayer *metalLayer;
 static UIView *bootOverlay;
@@ -161,8 +161,8 @@ void runtime_ios_attach_layer(CAMetalLayer *layer,UIView *host){
  bootDetail.font=[UIFont systemFontOfSize:14];bootDetail.textAlignment=NSTextAlignmentCenter;
  bootDetail.numberOfLines=2;bootDetail.adjustsFontSizeToFitWidth=YES;bootDetail.minimumScaleFactor=0.6;   /* a message (no game data) fits in two lines */
  bootProgress=[[UIProgressView alloc] initWithFrame:CGRectMake(w/2-140,h/2+30,280,8)];bootProgress.hidden=YES;
-#if defined(TOUCHNX_INTEGRATION) && __has_include(<adapters/macnativegames/ios/boot_overlay.h>)
- tnx_mng_layout_boot_overlay(bootOverlay,bootStage,bootDetail,bootProgress);
+#ifdef MNG_APP_EXTENSIONS
+ runtime_ios_layout_boot_overlay(bootOverlay,bootStage,bootDetail,bootProgress);
 #else
  [bootOverlay addSubview:bootStage];[bootOverlay addSubview:bootDetail];[bootOverlay addSubview:bootProgress];
 #endif

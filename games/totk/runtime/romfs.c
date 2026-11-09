@@ -5,8 +5,8 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
-#if defined(TOUCHNX_INTEGRATION) && __has_include(<include/resource_backend.h>)
-#include <include/resource_backend.h>
+#ifdef MNG_RESOURCE_PROVIDER
+#include "resource_provider.h"
 #endif
 
 #include <CommonCrypto/CommonDigest.h>
@@ -59,9 +59,9 @@ static uint8_t *index_bytes;
 static size_t index_size;
 static uint64_t file_count,strings_offset;
 static int image_fd=-1;
-#ifdef TOUCHNX_RESOURCE_READER
+#ifdef MNG_RESOURCE_PROVIDER
 static int resources_initialized;
-static tnx_resource_file *resource_handles[NH];
+static RuntimeResourceFile *resource_handles[NH];
 #endif
 /* Split image: romfs.bin.000, .001, ... of equal size (the last one shorter), read in place. The phone gets the 17 GB
    image this way: devicectl drops the connection on a single file of that size, and joining the parts on the device
@@ -201,8 +201,16 @@ static void sha_range(int fd,uint64_t offset,uint64_t size,const char *expected,
  uint8_t d[32];char hex[65];CC_SHA256_Final(d,&c);free(buffer);for(unsigned i=0;i<32;i++)snprintf(hex+i*2,3,"%02x",d[i]);
  if(strcmp(hex,expected)){fprintf(stderr,"[totk] RomFS overlay: %s SHA-256 %s, manifest says %s\n",what,hex,expected);runtime_fail("RomFS overlay integrity mismatch");}
 }
-#ifdef TOUCHNX_RESOURCE_READER
-#include <adapters/macnativegames/runtime/resource_original.inc>
+#ifdef MNG_RESOURCE_PROVIDER
+static void resource_original(const char *name,const char *expected) {
+ char logical[4096];need(snprintf(logical,sizeof logical,"romfs/%s",name)<(int)sizeof logical,"resource path");
+ RuntimeResourceFile *file=runtime_resource_open(logical);if(!file)runtime_fail(runtime_resources_error());
+ CC_SHA256_CTX hash;CC_SHA256_Init(&hash);uint8_t *buffer=malloc(8<<20);need(buffer!=NULL,"hash buffer");
+ uint64_t size=runtime_resource_size(file),done=0;
+ while(done<size){ssize_t n=runtime_resource_read(file,buffer,(size_t)(size-done>(8<<20)?(8<<20):size-done),done);if(n<=0)runtime_fail(runtime_resources_error());CC_SHA256_Update(&hash,buffer,(CC_LONG)n);done+=(uint64_t)n;}
+ uint8_t digest[32];char text[65];CC_SHA256_Final(digest,&hash);free(buffer);runtime_resource_close(file);
+ for(unsigned i=0;i<32;i++)snprintf(text+i*2,3,"%02x",digest[i]);need(!strcmp(text,expected),"RomFS overlay original integrity mismatch");
+}
 #endif
 static uint64_t lower(const char *name);
 static int path_ok(const char *p);
@@ -223,8 +231,8 @@ static void overlay_load(const char *dir,int required,int mods) {
   if(known&&add){fprintf(stderr,"[totk] RomFS overlay: %s/manifest.tsv adds %s, which the RomFS already has; give its original's SHA-256\n",dir,name);runtime_fail("RomFS overlay adds a file the RomFS already has");}
   size_t over=SIZE_MAX;if(mods&&known)for(size_t k=0;k<first;k++)if(overlays[k].index==i&&!strcmp(overlays[k].sha,orig)){over=k;break;}
   Entry e={0};if(known){e=entry(i);if(over==SIZE_MAX){
-#ifdef TOUCHNX_RESOURCE_READER
-   if(tnx_resources_active&&tnx_resources_active())resource_original(name,orig);else
+#ifdef MNG_RESOURCE_PROVIDER
+   if(runtime_resources_active())resource_original(name,orig);else
 #endif
    sha_range(image_fd,e.offset,e.size,orig,"original");}}else i=ADDED;
   char file[8200];need(snprintf(file,sizeof(file),"%s/%s",dir,name)<(int)sizeof(file),"RomFS overlay file path");int fd=open(file,O_RDONLY|O_CLOEXEC);struct stat st;
@@ -301,9 +309,9 @@ static void overlay_init(void) {
   runtime_fail("RomFS overlay: two overlays replace the same file (see the log; remove it from one of the manifests)");}
 }
 void runtime_fs_init(void) {
-#ifdef TOUCHNX_RESOURCE_READER
+#ifdef MNG_RESOURCE_PROVIDER
  if(resources_initialized)return;
- int resource_mode=tnx_backend_resources();if(resource_mode<0)runtime_fail(tnx_resources_error());
+ int resource_mode=runtime_resources_init();if(resource_mode<0)runtime_fail(runtime_resources_error());
 #endif
  if(image_fd>=0)return;
  romfs_image_size=runtime_game_number("romfs-config.txt","ROMFS_IMAGE_SIZE");romfs_image_sha256=runtime_game_sha256("romfs-config.txt","ROMFS_IMAGE_SHA256");
@@ -319,8 +327,8 @@ void runtime_fs_init(void) {
  /* TOTK_ROMFS_DATA: the folder of the image (romfs.bin or its parts) when it is not the index's: the phone keeps the 17 GB in
     Documents/GameData (ios/Sources/main.m), so a new build of the app carries only the index and installs in minutes. */
  const char *data=getenv("TOTK_ROMFS_DATA");if(!data||!*data)data=dir;
-#ifdef TOUCHNX_RESOURCE_READER
- if(resource_mode){need(tnx_resource_volume("romfs"),"No compatible game resource volume");goto resources_ready;}
+#ifdef MNG_RESOURCE_PROVIDER
+ if(resource_mode){need(runtime_resource_volume("romfs"),"No compatible game resource volume");goto resources_ready;}
 #endif
  need(snprintf(path,sizeof(path),"%s/romfs.bin",data)<(int)sizeof(path),"RomFS image path");image_fd=open(path,O_RDONLY);
  if(image_fd<0)open_chunks(data);
@@ -332,7 +340,7 @@ void runtime_fs_init(void) {
   else fprintf(stderr,"[totk] RomFS mmap failed (%s); using pread\n",strerror(errno));
  }
  runtime_boot_status(TOTK_UI("准备游戏资源","Preparing game data"),TOTK_UI("检查分辨率补丁并挂载只读游戏资源","Checking the resolution patch and mounting the read-only game data"));
-#ifdef TOUCHNX_RESOURCE_READER
+#ifdef MNG_RESOURCE_PROVIDER
 resources_ready:
  resources_initialized=1;
 #endif
@@ -364,16 +372,16 @@ unsigned runtime_romfs_open(uint64_t *out,const char *path,int mode) {
   fs_log("overlay",o->path);
   if(fd<0||fstat(fd,&st)!=0||(uint64_t)st.st_size!=o->size||st.st_dev!=o->dev||st.st_ino!=o->ino||st.st_mtimespec.tv_sec!=o->mtime.tv_sec||st.st_mtimespec.tv_nsec!=o->mtime.tv_nsec){
    fprintf(stderr,"[totk] RomFS overlay: %s is missing or changed since the start check\n",o->path);runtime_fail("RomFS overlay file changed while the game ran (restart the game)");}}
-#ifdef TOUCHNX_RESOURCE_READER
- tnx_resource_file *resource=NULL;
- if(!ov&&tnx_resources_active&&tnx_resources_active()){
+#ifdef MNG_RESOURCE_PROVIDER
+ RuntimeResourceFile *resource=NULL;
+ if(!ov&&runtime_resources_active()){
   char logical[4096];need(snprintf(logical,sizeof logical,"romfs/%s",p)<(int)sizeof logical,"resource path");
-  resource=tnx_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(tnx_resources_error());}
-  need(tnx_resource_size(resource)==entry(i).size,"Resource size differs from the backend index");
+  resource=runtime_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(runtime_resources_error());}
+  need(runtime_resource_size(resource)==entry(i).size,"Resource size differs from the backend index");
  }
 #endif
  pthread_mutex_lock(&lock);for(unsigned j=1;j<NH;j++)if(!handles[j]){handles[j]=i+1;handle_ovl[j]=ov;handle_fd[j]=fd;
-#ifdef TOUCHNX_RESOURCE_READER
+#ifdef MNG_RESOURCE_PROVIDER
  resource_handles[j]=resource;
 #endif
  *out=0x100000000ULL+j;pthread_mutex_unlock(&lock);return 0;}pthread_mutex_unlock(&lock);runtime_fail("file handle table full");return INVALID;
@@ -390,9 +398,9 @@ unsigned runtime_romfs_read(uint64_t *out,uint64_t h,int64_t offset,void *buffer
  static _Atomic int profile_mode=-1;int profile=atomic_load(&profile_mode);if(profile<0){profile=getenv("TOTK_FS_TIMING")!=NULL;atomic_store(&profile_mode,profile);}uint64_t prep_start=profile?runtime_now_ns():0;
  dm_guest_write_prepare(buffer,(size_t)n);
  uint64_t t0=profile?runtime_now_ns():0;
-#ifdef TOUCHNX_RESOURCE_READER
- tnx_resource_file *resource=resource_handles[h-0x100000000ULL];
- if(resource){while(done<n){ssize_t got=tnx_resource_read(resource,(uint8_t *)buffer+done,(size_t)(n-done),(uint64_t)offset+done);if(got<=0)runtime_fail(tnx_resources_error());done+=(uint64_t)got;}}
+#ifdef MNG_RESOURCE_PROVIDER
+ RuntimeResourceFile *resource=resource_handles[h-0x100000000ULL];
+ if(resource){while(done<n){ssize_t got=runtime_resource_read(resource,(uint8_t *)buffer+done,(size_t)(n-done),(uint64_t)offset+done);if(got<=0)runtime_fail(runtime_resources_error());done+=(uint64_t)got;}}
  else
 #endif
  if(fd==image_fd&&image_map){memcpy(buffer,image_map+base+(uint64_t)offset,(size_t)n);done=n;}
@@ -406,8 +414,8 @@ unsigned runtime_romfs_read(uint64_t *out,uint64_t h,int64_t offset,void *buffer
 }
 unsigned runtime_romfs_size(int64_t *out,uint64_t h) {Entry e;if(!out||!handle_entry(h,&e))return INVALID;int fd;uint64_t base,size;handle_source(h,&e,&fd,&base,&size);*out=(int64_t)size;return 0;}
 void runtime_romfs_close(uint64_t h) {Entry e;if(!handle_entry(h,&e))runtime_fail("close invalid file handle");uint64_t j=h-0x100000000ULL;pthread_mutex_lock(&lock);int fd=handle_ovl[j]?handle_fd[j]:-1;handles[j]=0;handle_ovl[j]=0;handle_fd[j]=-1;
-#ifdef TOUCHNX_RESOURCE_READER
- tnx_resource_close(resource_handles[j]);resource_handles[j]=NULL;
+#ifdef MNG_RESOURCE_PROVIDER
+ runtime_resource_close(resource_handles[j]);resource_handles[j]=NULL;
 #endif
  pthread_mutex_unlock(&lock);if(fd>=0)close(fd);}
 unsigned runtime_romfs_entry_type(int *out,const char *path) {

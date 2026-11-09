@@ -48,7 +48,7 @@ static _Atomic int active;                                        /* the sensor 
 static _Atomic int orientation = DEVICE_MOTION_UI_LANDSCAPE_RIGHT;   /* read on the sensor's queue */
 static _Atomic uint64_t samples;
 static _Atomic int sampleErrorLogged;
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
 static __weak UIView *motionBody;
 static _Atomic int bodyFrame;
 #endif
@@ -66,7 +66,7 @@ static void set_controller_sensors(BOOL on) {   /* main thread */
 }
 static void follow_owner(void);
 static void claim_phone_gyro(void) {   /* main thread */
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
     follow_owner();return;
 #endif
     if (!atomic_exchange(&phone_owns_gyro, 1)) fprintf(stderr, "[gyro] the screen was touched: the phone's gyro aims now\n");
@@ -74,7 +74,7 @@ static void claim_phone_gyro(void) {   /* main thread */
     follow_owner();
 }
 static void claim_pad_gyro(void) {   /* main thread */
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
     follow_owner();return;
 #endif
     if (atomic_exchange(&phone_owns_gyro, 0)) fprintf(stderr, "[gyro] the gamepad is used: its own gyro aims again\n");
@@ -138,7 +138,7 @@ static BOOL start_updates(void) {
         return NO;
     }
     if (sensing) return YES;
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
     atomic_store(&bodyFrame,0);
 #if defined(__IPHONE_27_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_0
     if (@available(iOS 27.0,*)) { manager.deviceMotionBody=motionBody;atomic_store(&bodyFrame,motionBody!=nil); }
@@ -153,7 +153,7 @@ static BOOL start_updates(void) {
             return;
         }
         if (!motion) return;
-#ifndef TOUCHNX_INTEGRATION
+#ifndef MNG_MOTION_FILTER
         if (atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro))
             return;   /* the controller's gyro took the aiming between this sample and the sensor's stop */
 #endif
@@ -162,7 +162,7 @@ static BOOL start_updates(void) {
                                      motion.gravity.z + motion.userAcceleration.z};
         const double deviceGyro[3] = {motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z};
         double acc[3], gyro[3];
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
         const int o = atomic_load(&bodyFrame) ? DEVICE_MOTION_UI_PORTRAIT : atomic_load(&orientation);
 #else
         const int o = atomic_load(&orientation);
@@ -174,11 +174,7 @@ static BOOL start_updates(void) {
             fprintf(stderr, "[phone-gyro] first sample: acc %+.2f %+.2f %+.2f G, gyro %+.1f %+.1f %+.1f deg/s (%s)\n",
                     acc[0], acc[1], acc[2], gyro[0] * 180 / M_PI, gyro[1] * 180 / M_PI, gyro[2] * 180 / M_PI,
                     o == DEVICE_MOTION_UI_LANDSCAPE_LEFT ? "landscape left" : "landscape right");
-#ifdef TOUCHNX_INTEGRATION
         runtime_motion_feed_device(acc, gyro, runtime_now_ns());
-#else
-        runtime_motion_feed(acc, gyro, runtime_now_ns());
-#endif
     }];
     /* isDeviceMotionActive can still be false right after the call; the handler above is already scheduled. */
     sensing = YES;
@@ -192,8 +188,12 @@ static void stop_updates(void) {
 
 /* The phone's sensor and the input watch follow the owner of the aiming (main thread, while the app is active). */
 static void follow_owner(void) {
-#ifdef TOUCHNX_INTEGRATION
-#include <ios/motion_owner.inc>
+#ifdef MNG_MOTION_FILTER
+    unsigned sources=runtime_motion_sources();watch_gamepad(NO);
+    set_controller_sensors((sources&1)!=0);
+    if(!atomic_load(&active) || !(sources&2)){stop_updates();runtime_motion_phone(0);return;}
+    if(!sensing && start_updates())runtime_motion_phone(1);
+    return;
 #endif
     if (!atomic_load(&active)) { watch_gamepad(NO); return; }
     BOOL pad = atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro);
@@ -252,7 +252,7 @@ static void orientation_changed(void) {
 void totk_phone_motion_start(void) {
     if (started) return;
     started = YES;
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
     enabled=runtime_gyro_enabled();
 #else
     enabled = totk_phone_setting_enabled(@"TOTK_PHONE_GYRO") && runtime_gyro_enabled();
@@ -284,7 +284,7 @@ void totk_phone_motion_start(void) {
         update_active();
     });
 }
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
 void totk_device_motion_bind_view(UIView *view) {
     if(motionBody==view)return;
     BOOL was=sensing;if(was)stop_updates();motionBody=view;
@@ -301,15 +301,15 @@ void totk_device_motion_geometry_changed(UIInterfaceOrientation value) {
 
 void totk_phone_motion_start(void) {}
 void totk_device_motion_note_touch(void) {}
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_MOTION_FILTER
 void totk_device_motion_bind_view(UIView *view) { (void)view; }
 void totk_device_motion_geometry_changed(UIInterfaceOrientation value) { (void)value; }
 #endif
 
 #endif
 
-#if defined(TOUCHNX_INTEGRATION) && TARGET_OS_IOS
+#if defined(MNG_MOTION_FILTER) && TARGET_OS_IOS
 void totk_phone_motion_source_changed(void) {dispatch_async(dispatch_get_main_queue(),^{if(started && enabled)follow_owner();});}
-#elif defined(TOUCHNX_INTEGRATION)
+#elif defined(MNG_MOTION_FILTER)
 void totk_phone_motion_source_changed(void) {}
 #endif

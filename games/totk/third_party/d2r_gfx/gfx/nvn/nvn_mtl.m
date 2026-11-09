@@ -18,10 +18,9 @@
 #include <fcntl.h>
 #include "nvn_mtl.h"
 #include "nvn_obj.h"
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_ui_scope.h>
-#include <runtime/graphics.h>
-#endif
+#define MNG_GFX_TYPES
+#include "nvn_extensions.h"
+#undef MNG_GFX_TYPES
 #include "nvn_ctl.h"   // NVN / NVN2 control sections
 #include "nvn_quad_strip.h"
 #include "nvn_impl.h"   // NVN_BLOCKING: release the guest core only while a write-back waits
@@ -666,22 +665,14 @@ void mtl_init(void) {
     g_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_ct) MDIE("建立 compute argument table 失败：%s", ate.localizedDescription.UTF8String);
     g_up_ct = [g_dev newArgumentTableWithDescriptor:atd error:&ate]; if (!g_up_ct) MDIE("建立上传 compute argument table 失败：%s", ate.localizedDescription.UTF8String);
     MTL4ArgumentTableDescriptor *pad = [MTL4ArgumentTableDescriptor new];
-#ifdef TOUCHNX_INTEGRATION
-    pad.maxTextureBindCount = 2;
-#else
-    pad.maxTextureBindCount = 1;
-#endif
+    pad.maxTextureBindCount = MNG_GFX_PRESENT_TEXTURES;
     pad.maxSamplerStateBindCount = 1; pad.maxBufferBindCount = 1;
     g_bloomq_args = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
     if (!g_bloomq_args) MDIE("建立泛光 1/4 argument table 失败：%s", ate.localizedDescription.UTF8String);
     for (int i = 0; i < 3; i++) {
         g_present_args[i] = [g_dev newArgumentTableWithDescriptor:pad error:&ate];
         if (!g_present_args[i]) MDIE("建立出图 argument table[%d] 失败：%s", i, ate.localizedDescription.UTF8String);
-#ifdef TOUCHNX_INTEGRATION
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 24 options:MTLResourceStorageModeShared];
-#else
-        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * 12 options:MTLResourceStorageModeShared];
-#endif
+        g_present_uv[i] = [g_dev newBufferWithLength:sizeof(float) * MNG_GFX_PRESENT_FLOATS options:MTLResourceStorageModeShared];
         if (!g_present_uv[i]) MDIE("建立出图 UV 缓冲[%d] 失败", i);
         res_add(g_present_uv[i]);
         if (g_present_probe) {
@@ -10244,11 +10235,9 @@ static uint64_t vr_palette_patch(const uint8_t *src, uint64_t size) {   // 0: no
     static int said; if (!said) { said = 1; MLOG("[vr] the head bone scaled to nothing (bone %ld of the head mesh, joint %.2f m): the neck closed", g_vr_head_bone, j); }
     return gpu;
 }
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_ui_projection.inc>
-#else
-static int tnx_mng_ui_uniform_active(void) { return 0; }
-#endif
+#define MNG_GFX_UNIFORMS
+#include "nvn_extensions.h"
+#undef MNG_GFX_UNIFORMS
 static uint64_t ui_mat_patch(const p_bind_buf *u, void *mb, uint64_t mo) {
     enum { RING = 4 << 20 }; static __strong id<MTLBuffer> ring; static uint64_t ring_gpu, la, ls, lp, lg; static size_t at; static double lo;
     if (!ring) { ring = [g_dev newBufferWithLength:RING options:MTLResourceStorageModeShared]; res_add(ring); ring_gpu = ring.gpuAddress; }
@@ -10464,10 +10453,8 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
         registry_unlock();
     }
     int reuse = !ab_noreuse && !passdump() && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 &&
-        !((g_vr_collapse_draw || g_vr_ui_ray_draw || tnx_mng_ui_uniform_active()) && nvn_stage == 0)
-#ifdef TOUCHNX_INTEGRATION
-        && !(nvn_stage == 1 && g_ui_dock_copy)
-#endif
+        !((g_vr_collapse_draw || g_vr_ui_ray_draw || MNG_GFX_UNIFORM_ACTIVE()) && nvn_stage == 0)
+        && !MNG_GFX_ARGUMENTS_VOLATILE(nvn_stage)
         && (epoch_mode ? epoch_hit : !g_args_dirty[nvn_stage]);
     int verify_epoch = reuse && epoch_mode && atomic_load_explicit(&g_arg_epoch_check, memory_order_relaxed);
     if (reuse) {
@@ -10485,12 +10472,10 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
     int bl = passdump() && (bl_all || bl_pass[nvn_stage] != g_stat_pass);
     if (bl) { bl_pass[nvn_stage] = g_stat_pass; PD("K %llu st%d key=%s nb=%d prog=%p", g_stat_pass, nvn_stage, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sh->rf.nb, (const void *)S.prog); }
     int cbc = !bl && !g_res_check_on && g_use != USE_REC ? cbc_mode() : 0;
-    if (nvn_stage == 0 && tnx_mng_ui_uniform_active()) cbc = 0;   // TOTK_CBUF_CACHE (see cbc_ctx)
+    if (nvn_stage == 0 && MNG_GFX_UNIFORM_ACTIVE()) cbc = 0;   // TOTK_CBUF_CACHE (see cbc_ctx)
     int slot_mode = tex_slots_on() && !verify_epoch && nvn_stage != 5 && arg_epoch_safe(sh) && !ab_noreuse &&
         !passdump() && !g_res_check_on && g_use != USE_REC && !tex_slots_diagnostics() && !nan_trace_match(sh);
-    #ifdef TOUCHNX_INTEGRATION
-    if (nvn_stage == 1 && g_ui_dock_copy) slot_mode = 0;
-#endif
+    if (MNG_GFX_ARGUMENTS_VOLATILE(nvn_stage)) slot_mode = 0;
     int slot_check = slot_mode && atomic_load_explicit(&g_tex_slots_check, memory_order_relaxed);
     tex_slot_key slot_key = {0}; uint64_t slot_mask = 0, slot_hits = 0, slot_misses = 0;
     uint64_t handles[NVN_REFL_MAXB];
@@ -10537,9 +10522,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
             if (ren) { gpu = ren; if (nvn_stage == 0 && reg == 0 && ui_mat_on()) RED_ONCE(58, "UI 矩阵修补读的是内存，跳过了含内联更新的 uniform 副本"); }
             else if (nvn_stage == 0 && reg == 0 && ui_mat_on()) { uint64_t pg = ui_mat_patch(u, mb, mo); if (pg) gpu = pg; }
             else { const usnap_t *sc = usnap_find(u->addr, u->size ? u->size : 1); if (sc) gpu = sc->gpu + (u->addr - sc->lo); }   // TOTK: contents as of the submit call
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_encode_uniform.inc>
-#endif
+            MNG_GFX_TRANSFORM_UNIFORM(nvn_stage,reg,u->size,mb,gpu);
             if (g_vr_collapse_draw && nvn_stage == 0 && reg == 2 && u->size <= 48 * 256) {   // zeldaVR: bones scaled to nothing, from the contents this draw reads (inline updates too)
                 static uint8_t pal[48 * 256]; pend_materialize(u->addr, pal, (size_t)u->size, 0);
                 uint64_t pg = vr_palette_patch(pal, u->size); if (pg) gpu = pg; }
@@ -10625,9 +10608,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
                 if (av) { t = av; trid = av.gpuResourceID._impl; } }
             if (t && tid && tid < g_ntreg && R.has_rt) { id<MTLTexture> mv = mip_feedback_view(t, g_treg[tid].t.serial); if (mv) { t = mv; trid = mv.gpuResourceID._impl; } }
             if (g_mfxup_out && (__bridge void *)sh == (__bridge void *)g_mfxup_sh && t == g_mfxup_src) { t = g_mfxup_out; trid = t.gpuResourceID._impl; }   // TOTK_MFX_UPSCALE
-#ifdef TOUCHNX_INTEGRATION
-            if (nvn_stage == 1 && reg == 0 && g_ui_dock_copy && g_ui_dock_image) { t=g_ui_dock_image; trid=t.gpuResourceID._impl; }
-#endif
+            MNG_GFX_TRANSFORM_TEXTURE(nvn_stage,reg,t,trid);
             slots[aid] = trid;
             USE(t, MTLResourceUsageRead);
         } else if (b->kind == NVN_RB_IMG) {   // 可写贴图：NVN 图像槽 r（BindImages）↔ D3D u_r | Writable texture: NVN image slot r (BindImages) ↔ D3D u_r
@@ -13775,13 +13756,10 @@ static void skv_done(skv_item *l, int n, uint32_t frame) {   /* submission compl
     for (int j = 0; j < n; j++) { skv_ent *e = &g_skv[l[j].idx]; if (e->last_frame != frame) { e->last_frame = frame; if (e->nonzero_frame == frame) { if (e->streak >= SKV_STREAK) { g_skv_revived++; e->stable_after = frame + SKV_HOLD; } e->streak = 0; } else if (e->streak < 1000) e->streak++; } CFRelease(l[j].buf); }
     free(l);
 }
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_rune_capture.inc>
-#include <gfx/botw_ui_layout.inc>
-#endif
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_draw.inc>
-#else
+#define MNG_GFX_DRAW
+#include "nvn_extensions.h"
+#undef MNG_GFX_DRAW
+#if !MNG_GFX_CUSTOM_DRAW
 static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_vr_ui_ray_draw=0;g_draw_depth++;
     draw_inner(dw,di);
@@ -14659,9 +14637,7 @@ static void vis_count_begin(id<MTL4RenderCommandEncoder> en) {
         }
 }
 static void draw_inner(const p_draw *dw, const p_draw_idx *di) {
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_draw_begin.inc>
-#endif
+    MNG_GFX_BEGIN_DRAW();
     NSUInteger native_output_width=0,native_output_height=0;
     uint64_t native_output_source=0;
     if(g_host_rect_draw){g_host_rect_draw=0;g_pso_dirty=1;}
@@ -14683,9 +14659,7 @@ static void draw_inner(const p_draw *dw, const p_draw_idx *di) {
     if (g_nupd) upd_guard_draw(pr, di);   // TOTK: before any encoder or texture preparation of this draw
     { int fit = pr ? prog_fit(pr) : 0; if (fit < 0) { draw_skipped(); return; } if (fit) g_pso_dirty = 1; }
     if (skv_on()) { g_skv_draws++; if (skv_check((__bridge const void *)pr, dw, di)) return; }   // measurement experiment: skip draws invisible in the last frames
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_draw_capture.inc>
-#endif
+    MNG_GFX_PREPARE_DRAW(pr);
     geometry_dump(pr, dw, di);
     if (di && di->itype == 0 && di->count && pend_hits(di->ibuf, (uint64_t)di->count)) widen_indices_gpu(di);
     /* Merge/skip checks can resolve sampling views too; prepare before any of those checks. */
@@ -15096,8 +15070,8 @@ frz_plain:;
                                  : g_vis_counting;
     if (taa_jittered() && nv > 6 && vo == 0 && vs == 1 && ux == 1 && uy == 1 && !vis_proxy && !fb_fn && !att_n && !(!att_store_on() && draw_att_reads(pr, att_rs)))
         taa_jitter(&jx, &jy);
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_draw_viewport.inc>
+#if MNG_GFX_CUSTOM_LAYOUT
+    MNG_GFX_DRAW_LAYOUT(tw,th,vx,vy,vw,vh,sc);
 #else
     MTLScissorRect sc = {0, 0, tw, th};
     if (R.has_sc) {
@@ -15153,11 +15127,9 @@ frz_plain:;
     vbuf_log(pr->sh[0], pr->sh[1], dw, di);
     if (g_lay.active) enc_r_vbuf(en, LAY_BUF_INDEX, lay_gpu(g_lay_probe_neg == 1 ? 0 : g_lay.cur - g_lay.base));   // TOTK: this draw's layer within the layered pass
     if (pr->sh[0]) encode_args(en, pr->sh[0], 0, 1);
-    if (pr->sh[0] && (g_vr_collapse_draw||g_vr_ui_ray_draw||tnx_mng_ui_uniform_active())) pr->sh[0]->ab_pass = 0;   // Per-draw immutable palette/HUD bytes cannot leak to the next draw.
+    if (pr->sh[0] && (g_vr_collapse_draw||g_vr_ui_ray_draw||MNG_GFX_UNIFORM_ACTIVE())) pr->sh[0]->ab_pass = 0;   // Per-draw immutable palette/HUD bytes cannot leak to the next draw.
     if (pr->sh[1]) encode_args(en, pr->sh[1], 1, 0);
-#ifdef TOUCHNX_INTEGRATION
-    if (pr->sh[1] && g_ui_dock_copy) pr->sh[1]->ab_pass=0;
-#endif
+    if (pr->sh[1] && MNG_GFX_ARGUMENTS_VOLATILE(1)) pr->sh[1]->ab_pass=0;
     // 参数绑定在登记表锁内捕获实际资源；资格判断到绑定期间有版本变化，则在任何GPU draw前切开重试。
     // Parameter binding captures the actual resources under the registry lock; if the version changed between the eligibility check and the binding, split and retry before any GPU draw.
     if (g_rt_range_active && (g_pass.reg_gen != g_reg_gen || g_pass.ser_gen != g_ser_gen || g_pass.range_dirty != nvn_dirty_now())) { rp_end(); draw(dw, di); return; }
@@ -16285,9 +16257,7 @@ void mtl_exec(const uint8_t *p) {
                 PD("Y update_ub cmd=%p src=%#llx dst=%#llx bytes=%llu", p, (unsigned long long)((const uint8_t *)a + 16), (unsigned long long)d, (unsigned long long)n); mtl_sub_update((const uint8_t *)a + 16, d, n); break; }
             case OP_SET_RT: {
                 const p_set_rt *r = a;
-#ifdef TOUCHNX_INTEGRATION
-                seated_dock_finish();
-#endif
+                MNG_GFX_BEFORE_TARGET_CHANGE();
                 g_cg.rt_seq++; if (g_cg_pending && !cg_rt_match(r)) { g_cg.reason[0]++; cg_flush(); }   // TOTK: a target that is not a cube face set lands the pending groups
                 if (defer_begin_q(p)) break;
                 int pend = R.clear_d || R.clear_s; for (int i = 0; i < 8; i++) pend |= R.clear_c[i];
@@ -16308,9 +16278,7 @@ void mtl_exec(const uint8_t *p) {
             }
             case OP_CLEAR_COLOR: {
                 const p_clear_color *c = a;
-#ifdef TOUCHNX_INTEGRATION
-                seated_dock_finish();
-#endif
+                MNG_GFX_BEFORE_TARGET_CHANGE();
                 if (atomic_load(&g_draw_log) > 0 && c->index >= 0 && c->index < R.rt.n && R.rt.color[c->index])
                     MLOG("[uw] F%llu pass %llu clear c%d ser %llu %ux%u fmt %#x mask %#x rgba %g %g %g %g%s", (unsigned long long)atomic_load(&g_cur_frame), g_stat_pass, c->index,
                          (unsigned long long)R.rt.color[c->index]->serial, R.rt.color[c->index]->d.width, R.rt.color[c->index]->d.height, R.rt.color[c->index]->d.format, c->mask,
@@ -16324,9 +16292,7 @@ void mtl_exec(const uint8_t *p) {
             }
             case OP_CLEAR_DS: {
                 const p_clear_ds *c = a;
-#ifdef TOUCHNX_INTEGRATION
-                seated_dock_finish();
-#endif
+                MNG_GFX_BEFORE_TARGET_CHANGE();
                 if (S.render_disabled) { g_draw_skip[12]++; PD("E clear ds skipped: rendering disabled"); break; }   // TOTK
                 if (g_rt_merged) rp_end();
                 if (!R.rt.depth || (!c->depth_mask && !(c->stencil_mask & 255))) break;
@@ -16363,10 +16329,9 @@ static id<MTLRenderPipelineState> g_blit_hdr_pso;
 static BOOL g_blit_hdr_source;
 static id<MTLRenderPipelineState> g_blit_pso; static MTLPixelFormat g_blit_fmt;
 static id<MTLSamplerState> g_blit_samp;
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_present_filter.inc>
-#include <gfx/botw_seated.inc>
-#endif
+#define MNG_GFX_PRESENT
+#include "nvn_extensions.h"
+#undef MNG_GFX_PRESENT
 static uint64_t g_present_n;
 uint64_t mtl_present_count(void) { return g_present_n; }   // 实际出图次数（发热归因 DM_HEAT 算出图帧率） | Actual present count (heat attribution DM_HEAT computes the present frame rate)
 void mtl_res_snapshot(mtl_res_count *out) {
@@ -16418,9 +16383,9 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
 // Game picture needed by the whole-window screenshot (front end window_shot; no longer does drawViewHierarchy on a Metal layer with the display link attached): at the next present, the present thread draws the same frame
 // with the same encoding as the present (present_encode) into an offscreen texture of the same size as the swapchain, and after the GPU finishes hands out a CGImage in the completion callback (the callback does not block the present). Guarded by g_shotq_mu
 static void (^g_grab_cb)(CGImageRef img);
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_grab_callbacks.inc>
-#endif
+#define MNG_GFX_CAPTURE
+#include "nvn_extensions.h"
+#undef MNG_GFX_CAPTURE
 void mtl_grab_next_present(void (^cb)(CGImageRef img)) { pthread_mutex_lock(&g_shotq_mu); g_grab_cb = [cb copy]; pthread_mutex_unlock(&g_shotq_mu); }
 /* The window picture re-rendered offscreen by the legacy encoder: only for presents that draw no drawable
    (TOTK_PRESENT_SKIP measurement runs); a real present copies its drawable (present_now). */
@@ -17082,9 +17047,7 @@ static void outup_note_gpu(int slot) {   // the present command buffer of this s
 // black bars around it when the drawable has another shape (user 2026-10-25: 16:10 in full screen on a 3440x1440 display was stretched over all of
 // it, as was every ratio but 16:9). Within 1% (the remainder of a game width that is a multiple of 8, 1952x900 on 2868x1320 is 0.17%) it fills.
 static MTLViewport present_viewport(double dw, double dh, double cw, double ch) {
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_present_viewport.inc>
-#endif
+    MNG_GFX_PRESENT_VIEWPORT(dw,dh,cw,ch);
     static int stretch = -1;
     if (stretch < 0) { const char *e = getenv("TOTK_STRETCH"); stretch = e && !strcmp(e, "1"); }
     double a = runtime_aspect_now ? runtime_aspect_now() : 0, want = stretch ? dw / dh : a > 0 ? a : cw / ch;
@@ -17134,9 +17097,7 @@ static int present_encode(id<MTLCommandBuffer> cb, id<MTLTexture> src, id<MTLTex
     uv[8]=fminf(uv[8],t_hdr_present_peak);uv[9]=t_hdr_present_white;
 #endif
     [en setFragmentBytes:uv length:sizeof uv atIndex:0];
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_present_encode.inc>
-#endif
+    MNG_GFX_PRESENT_LEGACY(cb,en,src,dst,uv);
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [en setRenderPipelineState:g_blit_pso];
     MTLViewport ovp; float fuv[8];
@@ -17194,9 +17155,7 @@ static int present_encode_m4(id<MTL4CommandBuffer> cb, id<MTLTexture> src, id<MT
     [args setAddress:g_present_uv[uv_i].gpuAddress atIndex:0];
     [en setArgumentTable:args atStages:MTLRenderStageFragment];
     [en setViewport:vp]; [en setRenderPipelineState:g_blit_hdr_pso && (pic.pixelFormat==MTLPixelFormatRGBA16Float || dst.pixelFormat==MTLPixelFormatRGBA16Float) ? g_blit_hdr_pso : g_blit_pso];   // as present_encode
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_present_encode_m4.inc>
-#endif
+    MNG_GFX_PRESENT_METAL4(args,en,pic,dst,uv,uv_i);
     [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     MTLViewport ovp; float fuv[8];
     [en setRenderPipelineState:g_blit_pso];
@@ -17639,9 +17598,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     void (^grab)(CGImageRef) = nil; NSString *grab_src = nil;
     int grab_filter=0;
     if (g_grab_cb && interp < 0) { pthread_mutex_lock(&g_shotq_mu); grab = g_grab_cb; g_grab_cb = nil;
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_grab_selection.inc>
-#endif
+        MNG_GFX_CAPTURE_TAKE(grab_filter);
         if (g_grab_src_path[0]) { grab_src = @(g_grab_src_path); g_grab_src_path[0] = 0; } pthread_mutex_unlock(&g_shotq_mu); }
     /* TOTK_PRESENT_SKIP=1 (measurement only): never take a drawable, so the render pipeline's own frame rate shows (the window
        does not update). */
@@ -17671,9 +17628,7 @@ static int present_now(const tex_t *t, double period, uint64_t frame, uint64_t t
     BOOL grab_hdr=grab_texture.pixelFormat==MTLPixelFormatRGBA16Float;
     BOOL grab_bgra=grab_hdr || grab_texture.pixelFormat==MTLPixelFormatBGRA8Unorm || grab_texture.pixelFormat==MTLPixelFormatBGRA8Unorm_sRGB;
     CGRect grab_rect=CGRectMake(0,0,grab_texture.width,grab_texture.height);
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_grab_region.inc>
-#endif
+    MNG_GFX_CAPTURE_REGION(grab_filter,crop,grab_rect);
     size_t grab_bpp=grab_hdr?8:4;
     id<MTLBuffer> grab_buf = nil; size_t grab_w = grab_texture.width, grab_h = grab_texture.height;
     if (grab) {
@@ -18310,9 +18265,9 @@ void mtl_alloc_stats(uint64_t *waits, uint64_t *grown, int *n) { *waits = g_allo
 
 // ---------- TOTK standalone probes for the isolated GPU paths (runtime/gpu_path_probe.m) ----------
 static id<MTLBuffer> probe_buf(NSUInteger n) { id<MTLBuffer> b = [g_dev newBufferWithLength:n options:MTLResourceStorageModeShared]; if (!b) MDIE("probe buffer"); res_add(b); return b; }
-#ifdef TOUCHNX_INTEGRATION
-#include <gfx/botw_graphics_probe.inc>
-#endif
+#define MNG_GFX_DIAGNOSTICS
+#include "nvn_extensions.h"
+#undef MNG_GFX_DIAGNOSTICS
 /* widen_u8_gpu over sources at several byte offsets; returns the number of checked values, dies on a mismatch. */
 int mtl_probe_widen(void) {
     mtl_init();

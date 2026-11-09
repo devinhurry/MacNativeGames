@@ -11,8 +11,8 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
-#if defined(TOUCHNX_INTEGRATION) && __has_include(<include/resource_backend.h>)
-#include <include/resource_backend.h>
+#ifdef MNG_RESOURCE_PROVIDER
+#include "resource_provider.h"
 #endif
 
 #include "totk_ui_lang.h"
@@ -43,8 +43,8 @@ static Vol vols[AOC_MAX] = {   /* sizes and hashes: config_load */
 };
 static struct { uint8_t vol; uint64_t entry; } handles[AOC_NH];   /* entry = file index + 1; 0 is free */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-#ifdef TOUCHNX_RESOURCE_READER
-static tnx_resource_file *resource_handles[AOC_NH];
+#ifdef MNG_RESOURCE_PROVIDER
+static RuntimeResourceFile *resource_handles[AOC_NH];
 #endif
 static void need(int c, const char *m) { if (!c) runtime_fail(m); }
 static pthread_once_t config_once = PTHREAD_ONCE_INIT;
@@ -62,8 +62,8 @@ static void config_load(void) {
 static int present(const Vol *v) {
     pthread_once(&config_once, config_load);
     if(!((present_mask >> (v->index - 1)) & 1))return 0;
-#ifdef TOUCHNX_RESOURCE_READER
-    if(tnx_backend_resources()>0){char volume[32];snprintf(volume,sizeof volume,"aoc/%d",v->index);return tnx_resource_volume(volume);}
+#ifdef MNG_RESOURCE_PROVIDER
+    if(runtime_resources_init()>0){char volume[32];snprintf(volume,sizeof volume,"aoc/%d",v->index);return runtime_resource_volume(volume);}
 #endif
     return 1;
 }
@@ -131,10 +131,10 @@ static void vol_load(Vol *v) {
         need(e.name < v->index_size - v->strings_offset && e.len > 1 && e.len <= v->index_size - v->strings_offset - e.name, "add-on content name bounds");
         const char *n = entry_name(v, e); need(n[e.len - 1] == 0 && strlen(n) == e.len - 1 && romfs_path_valid_relative(n), "add-on content file name");
         need(!previous || strcmp(previous, n) < 0, "add-on content index order"); previous = n; }
-#ifdef TOUCHNX_RESOURCE_READER
-    if(tnx_resources_active&&tnx_resources_active()){
+#ifdef MNG_RESOURCE_PROVIDER
+    if(runtime_resources_active()){
         char volume[64];snprintf(volume,sizeof volume,"aoc/%d",v->index);
-        need(tnx_resource_volume(volume),"Compatible add-on content volume is missing");v->loaded=1;return;
+        need(runtime_resource_volume(volume),"Compatible add-on content volume is missing");v->loaded=1;return;
     }
 #endif
     need(snprintf(path, sizeof path, "%s/romfs.bin", dir) < (int)sizeof path, "add-on content image path");
@@ -187,17 +187,17 @@ unsigned runtime_aoc_open(uint64_t *out, const char *path, int mode) {
     if (!out || mode != 1) return UNSUPPORTED;
     if (!v || !p) return NOT_FOUND;
     uint64_t i = lower(v, p); if (i >= v->file_count || strcmp(p, entry_name(v, entry(v, i)))) return NOT_FOUND;
-#ifdef TOUCHNX_RESOURCE_READER
-    tnx_resource_file *resource=NULL;
-    if(tnx_resources_active&&tnx_resources_active()){
+#ifdef MNG_RESOURCE_PROVIDER
+    RuntimeResourceFile *resource=NULL;
+    if(runtime_resources_active()){
         char logical[4096];need(snprintf(logical,sizeof logical,"aoc/%d/%s",v->index,p)<(int)sizeof logical,"add-on content resource path");
-        resource=tnx_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(tnx_resources_error());}
-        need(tnx_resource_size(resource)==entry(v,i).size,"Add-on content size differs from the backend index");
+        resource=runtime_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(runtime_resources_error());}
+        need(runtime_resource_size(resource)==entry(v,i).size,"Add-on content size differs from the backend index");
     }
 #endif
     pthread_mutex_lock(&lock);
     for (unsigned j = 1; j < AOC_NH; j++) if (!handles[j].entry) { handles[j].vol = (uint8_t)(v - vols); handles[j].entry = i + 1;
-#ifdef TOUCHNX_RESOURCE_READER
+#ifdef MNG_RESOURCE_PROVIDER
         resource_handles[j]=resource;
 #endif
         *out = AOC_HANDLE_BASE + j; pthread_mutex_unlock(&lock); return 0; }
@@ -214,9 +214,9 @@ unsigned runtime_aoc_read(uint64_t *out, uint64_t h, int64_t offset, void *buffe
     if ((uint64_t)offset > e.size || (!buffer && size)) return INVALID;
     uint64_t n = size; if (n > e.size - (uint64_t)offset) n = e.size - (uint64_t)offset; uint64_t done = 0;
     dm_guest_write_prepare(buffer, (size_t)n);
-#ifdef TOUCHNX_RESOURCE_READER
-    tnx_resource_file *resource=resource_handles[h-AOC_HANDLE_BASE];
-    if(resource){while(done<n){ssize_t got=tnx_resource_read(resource,(uint8_t *)buffer+done,(size_t)(n-done),(uint64_t)offset+done);if(got<=0)runtime_fail(tnx_resources_error());done+=(uint64_t)got;}*out=done;return 0;}
+#ifdef MNG_RESOURCE_PROVIDER
+    RuntimeResourceFile *resource=resource_handles[h-AOC_HANDLE_BASE];
+    if(resource){while(done<n){ssize_t got=runtime_resource_read(resource,(uint8_t *)buffer+done,(size_t)(n-done),(uint64_t)offset+done);if(got<=0)runtime_fail(runtime_resources_error());done+=(uint64_t)got;}*out=done;return 0;}
 #endif
     while (done < n) { size_t chunk = (size_t)(n - done); if (chunk > 8 << 20) chunk = 8 << 20;
         ssize_t r = pread(v->image_fd, (uint8_t *)buffer + done, chunk, (off_t)(e.offset + (uint64_t)offset + done)); if (r <= 0) runtime_fail("add-on content read failure"); done += (uint64_t)r; }
@@ -224,8 +224,8 @@ unsigned runtime_aoc_read(uint64_t *out, uint64_t h, int64_t offset, void *buffe
 }
 unsigned runtime_aoc_size(int64_t *out, uint64_t h) { Vol *v; Entry e; if (!out || !handle_entry(h, &v, &e)) return INVALID; *out = (int64_t)e.size; return 0; }
 void runtime_aoc_close(uint64_t h) { Vol *v; Entry e; if (!handle_entry(h, &v, &e)) runtime_fail("close invalid add-on content handle"); pthread_mutex_lock(&lock); handles[h - AOC_HANDLE_BASE].entry = 0;
-#ifdef TOUCHNX_RESOURCE_READER
- tnx_resource_close(resource_handles[h-AOC_HANDLE_BASE]);resource_handles[h-AOC_HANDLE_BASE]=NULL;
+#ifdef MNG_RESOURCE_PROVIDER
+ runtime_resource_close(resource_handles[h-AOC_HANDLE_BASE]);resource_handles[h-AOC_HANDLE_BASE]=NULL;
 #endif
   pthread_mutex_unlock(&lock); }
 unsigned runtime_aoc_entry_type(int *out, const char *path) {

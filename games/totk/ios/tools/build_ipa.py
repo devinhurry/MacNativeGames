@@ -162,10 +162,10 @@ def main():
     botw=a.version.startswith('botw')
     profile_path = os.environ.get('MNG_BUILD_PROFILE')
     integration = runpy.run_path(profile_path) if profile_path else None
-    three_packages=bool(integration and integration.get('EXTERNAL_PACKAGES'))
-    if (a.reuse_graphics or a.skip_romfs_package) and not three_packages:
+    external_assets=bool(integration and integration.get('EXTERNAL_ASSETS'))
+    if (a.reuse_graphics or a.skip_romfs_package) and not external_assets:
         raise RuntimeError('resource-package reuse requires an external package profile')
-    if three_packages:
+    if external_assets:
         integration['validate_reuse'](tree,a.reuse_graphics,a.skip_romfs_package,sdk_name)
     ns2=a.version in ('dkb','pkp')
     # The runtime's tables and hashes from the player's files (runtime/game_data.h) go into the app as files, not into its code.
@@ -278,7 +278,7 @@ def main():
     res=dest/'GameData';res.mkdir(exist_ok=True)
     copy_tree(game_data,res/'game-data')   # TOTK_GAME_DATA (Sources/main.m)
     romfs=tree/f'extracted/{a.version}/romfs'
-    if three_packages:
+    if external_assets:
         (res/'romfs').mkdir()
         clone(romfs/'runtime-index.bin',res/'romfs/runtime-index.bin')
     else:
@@ -293,7 +293,7 @@ def main():
         aoc=tree/f'extracted/{a.version}/aoc'
         for pack in sorted(aoc.iterdir()) if aoc.is_dir() else []:
             if (pack/'romfs.bin').is_file() and (pack/'runtime-index.bin').is_file():
-                for n in (('runtime-index.bin',) if three_packages else ('romfs.bin','runtime-index.bin')):
+                for n in (('runtime-index.bin',) if external_assets else ('romfs.bin','runtime-index.bin')):
                     clone(pack/n,res/'aoc'/pack.name/n)
     # The first frame waits only for the title screen's shaders (pso_title.tsv); the runtime looks for the list next to
     # DM_NVN_SHMAP, which is in shader-seed on iOS. Without it the first frame waits for the whole warm-up.
@@ -362,18 +362,18 @@ def main():
         # What the device reads: the seed and the two lists. With --image-outside it goes beside the app (<out>-shader-seed),
         # for install_device.py to put into Documents/GameData once per content (main.m); unchanged content is not copied again.
         fingerprint=seed_fingerprint(seed,lists)
-        seed_out=seed if three_packages else out.with_name(out.stem+'-shader-seed') if a.image_outside else res/'shader-seed'
+        seed_out=seed if external_assets else out.with_name(out.stem+'-shader-seed') if a.image_outside else res/'shader-seed'
         stamp=seed_out/'fingerprint.txt'
-        if three_packages or not (a.image_outside and stamp.is_file() and stamp.read_text().strip()==fingerprint):
-            if not three_packages:
+        if external_assets or not (a.image_outside and stamp.is_file() and stamp.read_text().strip()==fingerprint):
+            if not external_assets:
                 discard(seed_out); copy_tree(seed,seed_out)
             for n in ('pso_list.tsv','pso_title.tsv'): clone(lists/n,seed_out/n)
             stamp.write_text(fingerprint+'\n')
         for g in gpus:   # what goes to the device carries each cabled GPU's pipelines (install_device.py checks it again)
             state,line=seed_check(seed_out,g)
             if state!='ok': raise RuntimeError(f'{seed_out}: {line}')
-        if a.image_outside and not three_packages: print(f'shader seed: {seed_out} (install_device.py puts it into Documents once per content)')
-    if three_packages:
+        if a.image_outside and not external_assets: print(f'shader seed: {seed_out} (install_device.py puts it into Documents once per content)')
+    if external_assets:
         results=integration['build_packages'](tree,out,seed,dest/'dm',sdk_name,a.reuse_graphics,a.skip_romfs_package)
         for item in results:
             print(f"{item['kind']} package: {item['status']} {item.get('path','')}",flush=True)

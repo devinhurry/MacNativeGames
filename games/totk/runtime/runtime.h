@@ -275,6 +275,10 @@ void runtime_triggers_choose(int on);
 void runtime_triggers_release(void);   /* the game ends (atexit, and the window's close, whose _exit skips it): both triggers off */
 int runtime_motion_read(RuntimeMotionState *out, int max);   /* newest first; 0 = no motion now */
 void runtime_motion_start(void);   /* the game (re)started its sensor: angle and direction start over */
+/* Optional motion policy: source bits 1 controller / 2 device; filter 0 drop / 1 accept / 2 reset. */
+unsigned runtime_motion_sources(void);
+int runtime_filter_motion_source(int device,uint64_t received_ns);
+void runtime_audio_pause(int on);
 void runtime_motion_feed_device(const double acc_g[3],const double gyro_rad_s[3],uint64_t now_ns);
 void runtime_motion_feed(const double acc_g[3], const double gyro_rad_s[3], uint64_t now_ns);   /* runtime/motion_fusion.c */
 int runtime_motion_axes(const char *spec);   /* TOTK_GYRO_AXES ("-x,y,-z"): 1 set, 0 unset, -1 malformed */
