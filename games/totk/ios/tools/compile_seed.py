@@ -15,7 +15,8 @@ def main():
   # A library is kept by the hash of its source, the flags and the compiler (<seed>.ios-metallibs/): the default
   # variants of every shader are 33,000 files, an hour on 8 threads, and most of them are the same in the next build.
   version=subprocess.run(['xcrun','-sdk',sdk,'metal','--version'],check=True,capture_output=True,text=True).stdout
-  cache=seed.with_name(seed.name+'.ios-metallibs'); cache.mkdir(exist_ok=True)
+  cache=Path(os.environ.get('MNG_METALLIB_CACHE', seed.with_name(seed.name+'.ios-metallibs')))
+  cache.mkdir(parents=True, exist_ok=True)
   # Different variants can have identical MSL. Compile each verified content hash once: two workers previously wrote
   # the same PID-named cache temporary and one removed the other's file (Bananza's first full iOS seed).
   groups={}

@@ -2,6 +2,7 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -45,6 +46,32 @@ class CompileSeed(unittest.TestCase):
                 calls.clear()
                 compiler.main()
                 self.assertEqual(calls, [])
+
+    def test_shared_cache_reuses_other_work_folders_and_separates_compilers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            calls = []
+            version = ['compiler one']
+            def run(args, **kwargs):
+                if '--version' in args:
+                    return SimpleNamespace(stdout=version[0])
+                if '-c' in args:
+                    calls.append(args)
+                Path(args[args.index('-o')+1]).write_bytes(b'compiled library')
+                return SimpleNamespace(returncode=0)
+            with patch.dict(os.environ, MNG_METALLIB_CACHE=str(root/'shared')), \
+                 patch.object(compiler.subprocess, 'run', side_effect=run):
+                for work, expected in [('work-one', 1), ('work-two', 1), ('new-compiler', 2)]:
+                    if work == 'new-compiler': version[0] = 'compiler two'
+                    seed = root/work; seed.mkdir()
+                    source = b'identical verified source'
+                    (seed/'shader_b.metal').write_bytes(source)
+                    (seed/'seed-manifest.json').write_text(json.dumps({'chain': 'test',
+                        'files': {'shader_b.metal': hashlib.sha256(source).hexdigest()}}))
+                    with patch.object(sys, 'argv', ['compile_seed.py', str(seed), 'iphoneos']):
+                        compiler.main()
+                    self.assertEqual(len(calls), expected)
+                    self.assertTrue((seed/'shader_b.metallib').is_file())
 
 
 if __name__ == '__main__':
