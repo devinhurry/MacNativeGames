@@ -1274,6 +1274,11 @@ def step_shader_libs(tree, logs, *, version='v0'):
         say(f'   {len(failed)} shaders did not compile ahead of time; they are compiled at launch ({log})')
 
 
+def build_profile():
+    path = os.environ.get('MNG_BUILD_PROFILE')
+    return runpy.run_path(path) if path else {}
+
+
 def runtime_binary(tree, version):
     name = 'totk-native' if version == 'v0' else f'totk-native-{version}'
     name += os.environ.get('MNG_RUNTIME_SUFFIX', '')
@@ -2598,8 +2603,6 @@ def parse_args(argv):
     ap.add_argument('--ios-game-data', choices=('app', 'documents'), default='app',
                     help='iOS: carry the 17 GB RomFS image in the IPA (default), or leave it out for the app\'s Documents/GameData '
                          '(ios/tools/install_device.py --game-data copies it there once; later builds install in minutes)')
-    ap.add_argument('--reuse-graphics', type=Path, help='iOS: reuse a verified graphics package')
-    ap.add_argument('--skip-romfs-package', action='store_true', help='iOS: only update the IPA using verified game-data requirements')
     ap.add_argument('--device-gpu', action='append', metavar='ARCH',
                     help='iOS: compile the pipeline archive on this Mac for this GPU (applegpu_g14p for an iPhone 14; repeat for '
                          'more; none: no archive). Default: the GPUs of the iPhones / iPads on the cable. The first start then '
@@ -2639,10 +2642,14 @@ def parse_args(argv):
     fonts = ap.add_mutually_exclusive_group()
     fonts.add_argument('--firmware', type=Path, help='unpacked firmware NCA directory providing the six expected shared fonts (needed for NSP unless --shared-fonts or valid cached fonts are available; Breath of the Wild 1.9.0 too)')
     fonts.add_argument('--shared-fonts', type=Path, help='previously extracted shared-font directory containing the six verified .bfttf files')
+    profile = build_profile()
+    if profile.get('configure_arguments'):
+        profile['configure_arguments'](ap)
     return ap.parse_args(argv)
 
 
 def main(argv):
+    profile = build_profile()
     args = parse_args(argv)
     if args.game.expanduser().is_dir():   # a Switch 2 dump folder
         return main_ns2(args, args.game.expanduser().resolve())
@@ -2714,8 +2721,8 @@ def main(argv):
         if not isinstance(identity, list) or len(identity) != 3 or not all(isinstance(x, str) and x for x in identity):
             raise BuildError('App identity must contain a name, bundle identifier and executable')
         APPS[which] = tuple(identity)
-    if (args.reuse_graphics or args.skip_romfs_package) and (not os.environ.get('MNG_BUILD_PROFILE') or args.platform != 'ios' or os.environ.get('MNG_SELECTED_GAME') != which):
-        raise BuildError('resource-package reuse needs an iOS build profile for the selected game')
+    if profile.get('validate_build'):
+        profile['validate_build'](args, which)
     if args.native_5k and which not in ('totk', 'botw'):
         raise BuildError('--native-5k is only available for Tears of the Kingdom 1.4.3 and Breath of the Wild on Mac')
     if kind == 'nsp' and which != 'botw' and not fonts_given:   # only Breath of the Wild's fonts passed the check above
@@ -2757,8 +2764,6 @@ def main(argv):
         if os.environ.get('MNG_SELECTED_VERSION') and os.environ['MNG_SELECTED_VERSION'] != version:
             raise BuildError(f'Selected version {os.environ["MNG_SELECTED_VERSION"]}, but the input is {version}')
         expected = VERSIONS[version]
-        if (args.reuse_graphics or args.skip_romfs_package) and version != os.environ.get('MNG_SELECTED_VERSION'):
-            raise BuildError('resource-package reuse needs the selected game version')
         if shutil.disk_usage(existing_volume_path(work.parent if work.parent.exists() else game.parent)).free / 2**30 < 22 and \
                 not (work / f'totk/extracted/{version}/romfs/romfs.bin').exists():
             raise BuildError('needs about 22 GB free for the work folder (the app itself is an APFS clone of it when on the same volume)')
@@ -2780,7 +2785,7 @@ def main(argv):
             say('native 5K: ' + ('on (5120x2880 canvas and scene)' if native_5k else 'off'))
         step_code_botw(tree, botw, update or game, keys, env, logs, version=version, mod=code_mod)
         step_data_botw(tree, botw, game, keys, logs, version=version, update=update, dlc=dlcs, firmware=firmware, shared_fonts=shared_fonts)
-        if not args.reuse_graphics:
+        if not profile.get('prepare_shader_seed') or profile['prepare_shader_seed'](args):
             step_shaders_botw(tree, botw, logs, version=version)
         if not device_app:   # the Mac app's metallibs; build_ipa.py compiles the device's own (6 of a 21-minute iPhone build, 2026-10-28)
             step_shader_libs(tree, logs, version=version)
@@ -2789,10 +2794,9 @@ def main(argv):
         say(f'4/4 app: assembling {out}')
         if device_app:   # the same IPA tooling as Tears of the Kingdom (ios/tools/build_ipa.py --version botw160 / botw190)
             build_device_translator(tree, logs)
-            run([py, 'ios/tools/build_ipa.py', '--tree', tree, '--out', out, '--version', version,
+            run([py, profile.get('IOS_BUILDER', 'ios/tools/build_ipa.py'), '--tree', tree, '--out', out, '--version', version,
                  '--logs', logs, '--app-name', APPS['botw'][2], '--bundle-id', APPS['botw'][1],
-                 *(['--reuse-graphics', args.reuse_graphics.expanduser().resolve()] if args.reuse_graphics else []),
-                 *(['--skip-romfs-package'] if args.skip_romfs_package else []),
+                 *(profile['ios_arguments'](args) if profile.get('ios_arguments') else []),
                  *(['--image-outside'] if args.ios_game_data == 'documents' else []),
                  *[x for g in args.device_gpu or [] for x in ('--device-gpu', g)]], logs / 'build-ipa.log', cwd=tree, env=env)
             say_device_pipelines(logs)
@@ -2936,7 +2940,7 @@ def main(argv):
 if __name__ == '__main__':
     try:
         main(sys.argv[1:])
-    except BuildError as e:
+    except (BuildError, ValueError) as e:
         print(f'\nERROR: {e}', file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:

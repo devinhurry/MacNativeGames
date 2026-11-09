@@ -1189,40 +1189,9 @@ void runtime_gamepad_text_read(RuntimeGamepadState *out) {
 }
 #ifdef MNG_INPUT_FILTER
 static void gamepad_read(RuntimeGamepadState *out, RuntimeGamepadState *touch) {
-    pthread_mutex_lock(&gamepadLock);
-    *out = gamepadState;
-    if (gamepadRawLeftAt && runtime_now_ns() - gamepadRawLeftAt > 250000000ULL) {
-        out->lx = gamepadNativeLx; out->ly = gamepadNativeLy;
-    }
-    if (gamepadRawRightAt && runtime_now_ns() - gamepadRawRightAt > 250000000ULL) {   /* the HID reports stopped: GameController's right stick */
-        out->rx = gamepadNativeRx; out->ry = gamepadNativeRy;
-    }
-    out->buttons |= pressedEdges;
-    RuntimeGamepadState virtual=touchState;
-    virtual.buttons |= touchEdges;
-    virtual.rx = stronger_axis(virtual.rx, mouseRX); virtual.ry = stronger_axis(virtual.ry, mouseRY);
-    if (!touch) {
-        out->buttons |= virtual.buttons;
-        out->lx = stronger_axis(out->lx, virtual.lx); out->ly = stronger_axis(out->ly, virtual.ly);
-        out->rx = stronger_axis(out->rx, virtual.rx); out->ry = stronger_axis(out->ry, virtual.ry);
-        if (virtual.connected) out->connected = 1;
-    }
-    vr_pad_merge(out, 0);   /* zeldaVR: the Quest 3 controllers, merged like the touch screen */
-    pressedEdges = touchEdges = 0;
-    if (textCapture) {
-        RuntimeGamepadState held = text_state_locked();
-        if (textCapture == 2 && !held.buttons && !held.lx && !held.ly && !held.rx && !held.ry)
-            textCapture = 0;
-        *out = (RuntimeGamepadState){.connected = out->connected};
-        virtual = (RuntimeGamepadState){0};
-    }
-    if (touch) *touch=virtual;
-    pthread_mutex_unlock(&gamepadLock);
-}
-void runtime_gamepad_read(RuntimeGamepadState *out) { gamepad_read(out,NULL); }
-void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch) { gamepad_read(physical,touch); }
 #else
 void runtime_gamepad_read(RuntimeGamepadState *out) {
+#endif
     pthread_mutex_lock(&gamepadLock);
     *out = gamepadState;
     if (gamepadRawLeftAt && runtime_now_ns() - gamepadRawLeftAt > 250000000ULL) {
@@ -1231,19 +1200,37 @@ void runtime_gamepad_read(RuntimeGamepadState *out) {
     if (gamepadRawRightAt && runtime_now_ns() - gamepadRawRightAt > 250000000ULL) {   /* the HID reports stopped: GameController's right stick */
         out->rx = gamepadNativeRx; out->ry = gamepadNativeRy;
     }
-    out->buttons |= touchState.buttons | pressedEdges;
+#ifdef MNG_INPUT_FILTER
+    RuntimeGamepadState *physical = out;
+    out->buttons |= pressedEdges;
+    /* A split read routes only the touch/mouse merge into the separate result. */
+    if (touch) { *touch = (RuntimeGamepadState){0}; out = touch; }
+#endif
+    out->buttons |= touchState.buttons | touchEdges;
     out->lx = stronger_axis(out->lx, touchState.lx); out->ly = stronger_axis(out->ly, touchState.ly);
     out->rx = stronger_axis(out->rx, touchState.rx); out->ry = stronger_axis(out->ry, touchState.ry);
     out->rx = stronger_axis(out->rx, mouseRX); out->ry = stronger_axis(out->ry, mouseRY);
     if (touchState.connected) out->connected = 1;
+#ifdef MNG_INPUT_FILTER
+    out = physical;
+#endif
     vr_pad_merge(out, 0);   /* zeldaVR: the Quest 3 controllers, merged like the touch screen */
     pressedEdges = 0;
+#ifdef MNG_INPUT_FILTER
+    touchEdges = 0;
+#endif
     if (textCapture) {
         RuntimeGamepadState held = text_state_locked();
         if (textCapture == 2 && !held.buttons && !held.lx && !held.ly && !held.rx && !held.ry)
             textCapture = 0;
         *out = (RuntimeGamepadState){.connected = out->connected};
+#ifdef MNG_INPUT_FILTER
+        if (touch) *touch = (RuntimeGamepadState){0};
+#endif
     }
     pthread_mutex_unlock(&gamepadLock);
 }
+#ifdef MNG_INPUT_FILTER
+void runtime_gamepad_read(RuntimeGamepadState *out) { gamepad_read(out, NULL); }
+void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch) { gamepad_read(physical, touch); }
 #endif
