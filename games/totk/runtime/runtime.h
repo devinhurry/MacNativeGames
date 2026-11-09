@@ -135,6 +135,7 @@ int runtime_output_mode_set(int mode);                  /* returns 0 where that 
 int runtime_output_native(int mode, unsigned *w, unsigned *h);   /* the canvas of OUTPUT_MODE_NATIVE / _NATIVE_METALFX / _NATIVE_4K; 0 when not offered */
 uint64_t runtime_output_size_current(void);              /* configured canvas: width in low 32 bits, height in high 32 bits */
 int runtime_output_size_set(unsigned w,unsigned h);       /* NS2: queue the native game-thread display rebuild */
+int runtime_render_scale_set(float scale);  /* game-thread request, 0 when unavailable */
 void runtime_warm_progress(uint64_t done,uint64_t total,uint64_t shaders,uint64_t shader_total,uint64_t pipelines,uint64_t pipeline_total);
 void runtime_warm_done(void);
 void runtime_warm_title(void);   /* nvn_mtl.m warm_start: the title may be seen now, the rest of the warm-up behind it or done */
@@ -180,6 +181,7 @@ void *runtime_offline_override(const char *name);   /* runtime/offline_host.c: n
 void *runtime_ns2_codec_override(const char *name);
 void *runtime_ns2_audio_out_override(const char *name);
 void *runtime_ns2_opus_ms_override(const char *name);   /* nn::codec Opus multistream (runtime/ns2_opus_ms.c, GAME_NS2) */   /* nn::audio AudioOut (runtime/ns2_audio_out.c, GAME_NS2) */   /* nn::codec video and sync point events (runtime/ns2_codec.c, GAME_NS2) */   /* Switch 2 SDK calls (runtime/ns2_host.c, GAME_NS2 builds only) */
+int runtime_operation_mode_set(int docked);  /* 0 handheld, 1 docked; notify the running game */
 int runtime_handheld_mode(void);   /* TOTK_OPERATION_MODE=handheld (runtime/services.c) */
 void *runtime_input_override(const char *name);
 typedef struct { uint64_t buttons; int32_t lx,ly,rx,ry; int connected; } RuntimeGamepadState;

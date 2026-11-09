@@ -24,6 +24,9 @@
 uint32_t runtime_thread_current_handle(void);
 static void botw_aspect_install(Module *m);   /* the aspect ratio, end of the file */
 static int patch_output_res(Module *m);   /* native output size, after runtime_output_res */
+static _Atomic float output_render_scale=1;
+static _Atomic int output_scale_pending;
+static _Atomic uint64_t output_size_pending;
 static void botw_output_tick(void);       /* the size static follows the canvas after the start */
 static void botw_aspect_apply(void);
 static uint32_t adrp_reg(unsigned rd,uint64_t site,uint64_t target);
@@ -779,7 +782,8 @@ enum { PHONE_RENDER = 0x18216c8u, PHONE_RENDER_STR = 0xf9094b88u };   /* str x8,
 enum { PHONE_RENDER = 0x1266114u, PHONE_RENDER_STR = 0xf9090a68u };   /* str x8, [x19, #0x1210] */
 #endif
 static void patch_phone_render(Module *m) {
-    if (!ios_code()) return;
+    const char *scale=getenv("TOTK_RENDER_SCALE");
+    if (!ios_code() && !scale) return;
     const struct { uint32_t off, original; } check[] = {{PHONE_RENDER, 0xd2a89408u}, {PHONE_RENDER + 4, 0xf2e89408u}, {PHONE_RENDER + 8, PHONE_RENDER_STR}};
     for (size_t i = 0; !CODE_PATCHED_AT_BUILD && i < sizeof check / sizeof *check; i++) {
         uint32_t w; memcpy(&w, m->base + check[i].off, 4);
@@ -787,6 +791,13 @@ static void patch_phone_render(Module *m) {
             fprintf(stderr, "[botw] handheld render size main+%#x: found %08x expected %08x\n", check[i].off, w, check[i].original);
             runtime_fail("the phone's render size requires the " TOTK_GAME_VERSION " handheld display-mode instructions");
         }
+    }
+    if(!ios_code()) {
+        uint64_t data=(m->file_size+0x3fff)&~0x3fffULL;
+        if(data+0x4000!=m->size)runtime_fail("render scale requires the module data page");
+        put_word(m,PHONE_RENDER,adrp_reg(8,(uintptr_t)m->base+PHONE_RENDER,(uintptr_t)m->base+data),"handheld render scale");
+        put_word(m,PHONE_RENDER+4,0xf9404108u,"handheld render scale"); /* ldr x8,[x8,#0x80], separate from aspect/FOV slots */
+        return;
     }
     put_word(m, PHONE_RENDER + 4, 0xf2e88e08u, "handheld render size");   /* movk x8, #0x4470, lsl #48: 960.0 */
     fprintf(stderr, "[botw] handheld render size 960x540, the game's own upscale to the 1280x720 canvas (phone)\n");
@@ -1574,6 +1585,18 @@ static void output_parse(void) {
         if ((k = native_k_parse(e)) < 0) runtime_fail("TOTK_OUTPUT_RES: Breath of the Wild 1.9.0 takes auto, screen, 1440p, 1080p or 0, or a fixed 16:9 size above 1920x1080 up to 5120x2880 with a width that is a multiple of 128 (2560x1440, 3840x2160, 5120x2880)");
         g_out_mode = OUT_FIXED; g_out_start_big = 1;
     }
+    const char *capacity=getenv("TOTK_OUTPUT_CAPACITY");
+    if(capacity && g_out_mode==OUT_AUTO) {
+        int max=native_k_parse(capacity);
+        if(max<0)runtime_fail("TOTK_OUTPUT_CAPACITY requires a supported 16:9 canvas above 1080p");
+        if(max>k)k=max;
+    }
+    const char *scale=getenv("TOTK_RENDER_SCALE");
+    if(scale) {
+        char *end;float v=strtof(scale,&end);
+        if(end==scale||*end||!isfinite(v)||v<.5f||v>1)runtime_fail("TOTK_RENDER_SCALE must be 0.5..1");
+        atomic_store(&output_render_scale,v);
+    }
     g_out_w = 16u * k; g_out_h = 9u * k;
 }
 #endif
@@ -1612,7 +1635,10 @@ static uint64_t output_floats(unsigned screen, unsigned render) {
 static void output_page(unsigned w, unsigned h) {   /* what the docked branch writes from its next run on */
     const char *e = getenv("TOTK_RENDER_RES");
     unsigned render = w == 1920 && h == 1080 && e && !strcmp(e, "900") ? 1600 : w;   /* the shipped 1600x900 scene at 1080p only */
-    atomic_store(&g_out_page[0], output_floats(w, render));
+    float scale=atomic_load(&output_render_scale);
+    atomic_store(&g_out_page[0], output_floats(w, (unsigned)lroundf(render*scale)));
+    if(!ios_code() && getenv("TOTK_RENDER_SCALE"))
+        atomic_store(&g_out_page[14],output_floats(1280,(unsigned)lroundf(1280*scale)));
     atomic_store(&g_out_page[1], w | ((uint64_t)h << 32));
     atomic_store(&g_out_cur, w | ((uint64_t)h << 32));
 }
@@ -1622,7 +1648,7 @@ static int output_reapply(void) {
     if (!g) return 0;
     volatile uint8_t *gfx = (volatile uint8_t *)(uintptr_t)g;
     uint8_t mode = gfx[OUT_MODE_CUR];
-    if (mode != 0 && mode != 2) return 0;   /* docked only: handheld and VR keep their own sizes */
+    if (mode != 0 && mode != 2 && !(mode == 1 && getenv("TOTK_RENDER_SCALE"))) return 0;   /* VR keeps its own sizes */
     gfx[OUT_MODE_REQ] = mode;
     return 1;
 }
@@ -1669,7 +1695,25 @@ static void output_mfx_off(void) {   /* a start above 1080p turns MetalFX 2K off
    dungeon map and the noise gauge scale by it every call). On 1.9.0 a start above 1080p (1440p, screen, a fixed size)
    also turns off MetalFX 2K, which TOTK_MFX_OUTPUT / TOTK_MFX_UPSCALE may have turned on, so the panel starts from the
    native size (1.6.0 keeps upstream's start). */
+#ifdef GAME_BOTW190
+int runtime_output_size_set(unsigned w,unsigned h) {
+    if(ios_code()||g_out_mode!=OUT_AUTO||!g_out_page||w<320||w>g_out_w||h>g_out_h||w%16||w/16*9!=h)return 0;
+    atomic_store(&output_size_pending,w|((uint64_t)h<<32));return 1;
+}
+int runtime_render_scale_set(float scale) {
+    if(ios_code()||!g_out_page||!getenv("TOTK_RENDER_SCALE")||!isfinite(scale)||scale<.5f||scale>1)return 0;
+    atomic_store(&output_render_scale,scale);atomic_store(&output_scale_pending,1);return 1;
+}
+#endif
 static void botw_output_tick(void) {
+#ifdef GAME_BOTW190
+    uint64_t requested=atomic_exchange(&output_size_pending,0);
+    int scaled=atomic_exchange(&output_scale_pending,0);
+    if(g_out_page && (requested||scaled)) {
+        uint64_t size=requested?requested:atomic_load(&g_out_cur);
+        output_switch((unsigned)size,(unsigned)(size>>32));
+    }
+#endif
 #ifdef GAME_BOTW160
     if(g_out_vr){runtime_vr_render_apply_pending();return;}
 #endif

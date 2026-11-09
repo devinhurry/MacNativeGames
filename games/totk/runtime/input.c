@@ -1,6 +1,10 @@
 /* Native keyboard and macOS gamepad backed full-key controller. State ABI follows libnx HID. */
 #include <TargetConditionals.h>
 #include "runtime.h"
+#ifdef MNG_COMMAND_HANDLER
+/* An application may implement commands without adding input-file commands. */
+__attribute__((weak)) int runtime_external_input(const char *line) { (void)line;return 0; }
+#endif
 #include "game_version.h"
 #include "autoload.h"
 #include "world_survey.h"
@@ -280,6 +284,10 @@ static void *input_file(void *arg) {
             }
             continue;
         }
+#ifdef MNG_COMMAND_HANDLER
+        extern int runtime_external_input(const char *line);
+        if(runtime_external_input(line))continue;
+#endif
         if (runtime_survey_command(line)) continue;
         unsigned code, ms; int used = 0;
         if (sscanf(line, "down %u %n", &code, &used) == 1 && used && !line[used] && code < 128) {

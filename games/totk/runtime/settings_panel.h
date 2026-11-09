@@ -1801,4 +1801,10 @@ static void settings_controller_start(void){
  }];
  [NSRunLoop.mainRunLoop addTimer:settingsControllerTimer forMode:NSRunLoopCommonModes];
 }
-void runtime_settings_toggle(void){dispatch_async(dispatch_get_main_queue(), ^{settings_show(!settingsOpen);});}
+void runtime_settings_toggle(void){dispatch_async(dispatch_get_main_queue(), ^{
+#ifdef MNG_APP_EXTENSIONS
+ external_settings();
+#else
+ settings_show(!settingsOpen);
+#endif
+});}
