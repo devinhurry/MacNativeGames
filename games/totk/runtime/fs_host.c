@@ -18,10 +18,10 @@
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
 #include <sys/clonefile.h>
 #include <copyfile.h>
-#include "botw_touch/bridge.h"
+#include <runtime/bridge.h>
 #endif
 
 #define R_PATH_NOT_FOUND 0x202u
@@ -62,8 +62,15 @@ static void need(int c, const char *m) { if (!c) runtime_fail(m); }
    writes a slot's files back to back and then commits; between the files nothing is open for a moment). */
 static _Atomic int save_writers, save_dirty;
 static _Atomic uint64_t save_changed_ns;
+#ifdef TOUCHNX_INTEGRATION
 static _Atomic uint64_t save_generation;
-static void save_touched(void) { atomic_fetch_add(&save_generation,1); atomic_store(&save_changed_ns, runtime_now_ns()); atomic_store(&save_dirty, 1); }
+#endif
+static void save_touched(void) {
+#ifdef TOUCHNX_INTEGRATION
+    atomic_fetch_add(&save_generation,1);
+#endif
+    atomic_store(&save_changed_ns, runtime_now_ns()); atomic_store(&save_dirty, 1);
+}
 int runtime_fs_save_busy(void) {
     if (atomic_load(&save_writers) > 0) return 1;
     return atomic_load(&save_dirty) && runtime_now_ns() - atomic_load(&save_changed_ns) < 3000000000ull;
@@ -91,8 +98,8 @@ static void init(void) {
     char p[1100]; make_dir(profile);
     snprintf(p, sizeof p, "%s/save", profile); make_dir(p);
     need(snprintf(save_root, sizeof save_root, "%s/save/%016llx%016llx", profile, (unsigned long long)uid[1], (unsigned long long)uid[0]) < (int)sizeof save_root, "save path");
-#ifdef GAME_BOTW190
-    runtime_botw_save_prepare(profile,save_root,sizeof save_root);
+#ifdef TOUCHNX_INTEGRATION
+    tnx_mng_prepare_save(profile,save_root,sizeof save_root);
 #endif
     make_dir(save_root);                                   /* launcher-style EnsureSaveData */
     snprintf(p, sizeof p, "%s/temp", profile); remove_tree(p); make_dir(p);
@@ -101,21 +108,8 @@ static void init(void) {
     runtime_cloud_save_start(save_root, profile);   /* the sync folder's copy, when it is newer, before the game reads a save */
 }
 static void ready(void) { pthread_once(&once, init); }
-#ifdef GAME_BOTW190
-/* Files are written directly by this runtime. Clone only while no save has
-   uncommitted changes, and reject any snapshot crossed by a new mutation. */
-int dm_fs_clone_committed(const char *dir,const char *to) {
-    int active=*save_root && !strcmp(dir,save_root);
-    uint64_t generation=atomic_load(&save_generation);
-    if(active && (atomic_load(&save_writers) || atomic_load(&save_dirty))){errno=EBUSY;return -1;}
-    int copied=clonefile(dir,to,0);
-    if(copied && (errno==ENOTSUP || errno==EXDEV))copied=copyfile(dir,to,NULL,COPYFILE_ALL|COPYFILE_RECURSIVE);
-    if(copied)return -1;
-    if(active && (atomic_load(&save_writers) || atomic_load(&save_dirty) || atomic_load(&save_generation)!=generation)) {
-        remove_tree(to);errno=EBUSY;return -1;
-    }
-    return 0;
-}
+#ifdef TOUCHNX_INTEGRATION
+#include <adapters/macnativegames/runtime/save_snapshot.inc>
 #endif
 
 /* ---------- mounts and paths ---------- */

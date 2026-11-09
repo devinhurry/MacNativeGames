@@ -1,5 +1,5 @@
-#ifdef GAME_BOTW190
-#include "botw_touch/save_bridge.inc"
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/save_bridge.inc>
 #else
 /* Save sync through a folder the player chooses: the same save on the Mac and on iPhone / iPad.
 

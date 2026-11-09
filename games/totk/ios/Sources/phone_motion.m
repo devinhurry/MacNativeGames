@@ -48,8 +48,10 @@ static _Atomic int active;                                        /* the sensor 
 static _Atomic int orientation = DEVICE_MOTION_UI_LANDSCAPE_RIGHT;   /* read on the sensor's queue */
 static _Atomic uint64_t samples;
 static _Atomic int sampleErrorLogged;
+#ifdef TOUCHNX_INTEGRATION
 static __weak UIView *motionBody;
 static _Atomic int bodyFrame;
+#endif
 /* Which motion source owns the game's single six-axis sensor (see the file comment). Read on the sensor's queue. */
 static _Atomic int controller_has_motion;                         /* a connected controller reports a gyro */
 static _Atomic int phone_owns_gyro;                               /* touch took the aiming away from it */
@@ -64,7 +66,7 @@ static void set_controller_sensors(BOOL on) {   /* main thread */
 }
 static void follow_owner(void);
 static void claim_phone_gyro(void) {   /* main thread */
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
     follow_owner();return;
 #endif
     if (!atomic_exchange(&phone_owns_gyro, 1)) fprintf(stderr, "[gyro] the screen was touched: the phone's gyro aims now\n");
@@ -72,7 +74,7 @@ static void claim_phone_gyro(void) {   /* main thread */
     follow_owner();
 }
 static void claim_pad_gyro(void) {   /* main thread */
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
     follow_owner();return;
 #endif
     if (atomic_exchange(&phone_owns_gyro, 0)) fprintf(stderr, "[gyro] the gamepad is used: its own gyro aims again\n");
@@ -136,9 +138,11 @@ static BOOL start_updates(void) {
         return NO;
     }
     if (sensing) return YES;
+#ifdef TOUCHNX_INTEGRATION
     atomic_store(&bodyFrame,0);
 #if defined(__IPHONE_27_0) && __IPHONE_OS_VERSION_MAX_ALLOWED >= __IPHONE_27_0
     if (@available(iOS 27.0,*)) { manager.deviceMotionBody=motionBody;atomic_store(&bodyFrame,motionBody!=nil); }
+#endif
 #endif
     manager.deviceMotionUpdateInterval = 1.0 / 60.0;
     [manager startDeviceMotionUpdatesUsingReferenceFrame:CMAttitudeReferenceFrameXArbitraryZVertical toQueue:queue
@@ -149,7 +153,7 @@ static BOOL start_updates(void) {
             return;
         }
         if (!motion) return;
-#ifndef GAME_BOTW190
+#ifndef TOUCHNX_INTEGRATION
         if (atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro))
             return;   /* the controller's gyro took the aiming between this sample and the sensor's stop */
 #endif
@@ -157,7 +161,12 @@ static BOOL start_updates(void) {
                                      motion.gravity.y + motion.userAcceleration.y,
                                      motion.gravity.z + motion.userAcceleration.z};
         const double deviceGyro[3] = {motion.rotationRate.x, motion.rotationRate.y, motion.rotationRate.z};
-        double acc[3], gyro[3]; const int o = atomic_load(&bodyFrame) ? DEVICE_MOTION_UI_PORTRAIT : atomic_load(&orientation);
+        double acc[3], gyro[3];
+#ifdef TOUCHNX_INTEGRATION
+        const int o = atomic_load(&bodyFrame) ? DEVICE_MOTION_UI_PORTRAIT : atomic_load(&orientation);
+#else
+        const int o = atomic_load(&orientation);
+#endif
         device_motion_to_landscape(o, deviceAcc, acc);
         device_motion_to_landscape(o, deviceGyro, gyro);
         uint64_t n = atomic_fetch_add(&samples, 1);
@@ -165,7 +174,11 @@ static BOOL start_updates(void) {
             fprintf(stderr, "[phone-gyro] first sample: acc %+.2f %+.2f %+.2f G, gyro %+.1f %+.1f %+.1f deg/s (%s)\n",
                     acc[0], acc[1], acc[2], gyro[0] * 180 / M_PI, gyro[1] * 180 / M_PI, gyro[2] * 180 / M_PI,
                     o == DEVICE_MOTION_UI_LANDSCAPE_LEFT ? "landscape left" : "landscape right");
+#ifdef TOUCHNX_INTEGRATION
         runtime_motion_feed_device(acc, gyro, runtime_now_ns());
+#else
+        runtime_motion_feed(acc, gyro, runtime_now_ns());
+#endif
     }];
     /* isDeviceMotionActive can still be false right after the call; the handler above is already scheduled. */
     sensing = YES;
@@ -179,13 +192,8 @@ static void stop_updates(void) {
 
 /* The phone's sensor and the input watch follow the owner of the aiming (main thread, while the app is active). */
 static void follow_owner(void) {
-#ifdef GAME_BOTW190
-    const char *source=dm_motion_source_get();watch_gamepad(NO);
-    BOOL device=!strcmp(source,"auto") || !strcmp(source,"device");
-    set_controller_sensors(strcmp(source,"off") && strcmp(source,"device"));
-    if(!atomic_load(&active) || !device) {stop_updates();runtime_motion_phone(0);return;}
-    if(!sensing && start_updates())runtime_motion_phone(1);
-    return;
+#ifdef TOUCHNX_INTEGRATION
+#include <ios/motion_owner.inc>
 #endif
     if (!atomic_load(&active)) { watch_gamepad(NO); return; }
     BOOL pad = atomic_load(&controller_has_motion) && !atomic_load(&phone_owns_gyro);
@@ -244,7 +252,7 @@ static void orientation_changed(void) {
 void totk_phone_motion_start(void) {
     if (started) return;
     started = YES;
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
     enabled=runtime_gyro_enabled();
 #else
     enabled = totk_phone_setting_enabled(@"TOTK_PHONE_GYRO") && runtime_gyro_enabled();
@@ -276,6 +284,7 @@ void totk_phone_motion_start(void) {
         update_active();
     });
 }
+#ifdef TOUCHNX_INTEGRATION
 void totk_device_motion_bind_view(UIView *view) {
     if(motionBody==view)return;
     BOOL was=sensing;if(was)stop_updates();motionBody=view;
@@ -286,16 +295,21 @@ void totk_device_motion_geometry_changed(UIInterfaceOrientation value) {
     BOOL was=atomic_load(&active);if(was)phone_stop("the touch surface orientation changed");
     atomic_store(&orientation,(int)value);if(was)phone_start();
 }
+#endif
 
 #else
 
 void totk_phone_motion_start(void) {}
 void totk_device_motion_note_touch(void) {}
+#ifdef TOUCHNX_INTEGRATION
 void totk_device_motion_bind_view(UIView *view) { (void)view; }
 void totk_device_motion_geometry_changed(UIInterfaceOrientation value) { (void)value; }
+#endif
 
 #endif
 
-#ifdef GAME_BOTW190
+#if defined(TOUCHNX_INTEGRATION) && TARGET_OS_IOS
 void totk_phone_motion_source_changed(void) {dispatch_async(dispatch_get_main_queue(),^{if(started && enabled)follow_owner();});}
+#elif defined(TOUCHNX_INTEGRATION)
+void totk_phone_motion_source_changed(void) {}
 #endif

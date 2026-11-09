@@ -2,8 +2,8 @@
 #include <TargetConditionals.h>
 #include "runtime.h"
 #include "game_version.h"
-#ifdef GAME_BOTW190
-#include "botw_touch/bridge.h"
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/bridge.h>
 #endif
 #include "autoload.h"
 #include "world_survey.h"
@@ -129,17 +129,17 @@ static int pad_states(NpadState *out,int max,const uint32_t *id,uint32_t want_st
  state.lx=32767*((int)keys[2]-(int)keys[0]);state.ly=32767*((int)keys[13]-(int)keys[1]);state.rx=32767*((int)keys[124]-(int)keys[123]);state.ry=32767*((int)keys[126]-(int)keys[125]);
  if(heldOut.lx)state.lx=heldOut.lx;if(heldOut.ly)state.ly=heldOut.ly;if(heldOut.rx)state.rx=heldOut.rx;if(heldOut.ry)state.ry=heldOut.ry;
  RuntimeGamepadState pad;
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
  RuntimeGamepadState touch;runtime_gamepad_read_sources(&pad,&touch);
  if(ignore_user()){pad=(RuntimeGamepadState){0};touch=(RuntimeGamepadState){0};}
  RuntimeGamepadState combined={.buttons=state.buttons,.lx=state.lx,.ly=state.ly,.rx=state.rx,.ry=state.ry};
- runtime_botw_touch_merge(&combined,&pad,&touch);
+ tnx_mng_merge_inputs(&combined,&pad,&touch);
  state.buttons=combined.buttons;state.lx=combined.lx;state.ly=combined.ly;state.rx=combined.rx;state.ry=combined.ry;
 #else
  runtime_gamepad_read(&pad);if(ignore_user())pad=(RuntimeGamepadState){0};state.buttons|=pad.buttons;
 #endif
  if(pad.buttons&~padSeen||abs(pad.lx)>16384||abs(pad.ly)>16384||abs(pad.rx)>16384||abs(pad.ry)>16384)user_input("controller");padSeen=pad.buttons;
-#ifndef GAME_BOTW190
+#ifndef TOUCHNX_INTEGRATION
  if(abs(pad.lx)>abs(state.lx))state.lx=pad.lx;if(abs(pad.ly)>abs(state.ly))state.ly=pad.ly;
  if(abs(pad.rx)>abs(state.rx))state.rx=pad.rx;if(abs(pad.ry)>abs(state.ry))state.ry=pad.ry;
 #endif

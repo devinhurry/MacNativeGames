@@ -1,5 +1,8 @@
 /* Horizon services reached by the current TOTK startup. Unknown operations fail. */
 #include "runtime.h"
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/bridge.h>
+#endif
 #include <TargetConditionals.h>
 #include "ipc.h"
 #include <mach/mach.h>
@@ -290,23 +293,9 @@ static uint64_t alias_map(int unmap,uint64_t addr,uint64_t size){
  pthread_mutex_unlock(&memory_lock);return 0;
 }
 uint64_t runtime_heap_base(void){return (uintptr_t)heap;}
-/* BOTW UI observers inspect only memory actually mapped for the guest. Do not accept an arbitrary host address. */
-int runtime_guest_memory_contains(uintptr_t address){
- int readable=0;
- pthread_mutex_lock(&memory_lock);
- if(heap&&address>=(uintptr_t)heap&&address-(uintptr_t)heap<heap_size)readable=1;
- if(alias_space&&address>=ALIAS_START&&address-ALIAS_START<ALIAS_SIZE)
-  readable=alias_pages[(address-ALIAS_START)/4096]!=0;
- for(unsigned i=0;i<nstack_maps;i++){
-  const StackMap *m=&stack_maps[i];
-  if(address>=m->src&&address-m->src<m->size)readable=0;
-  if(address>=m->dst&&address-m->dst<m->size)readable=1;
- }
- pthread_mutex_unlock(&memory_lock);
- if(readable)return 1;
- uint64_t base,size;unsigned state,permission,attribute;
- return runtime_module_query(address,&base,&size,&state,&permission,&attribute)&&(permission&1);
-}
+#ifdef TOUCHNX_INTEGRATION
+#include <adapters/macnativegames/runtime/guest_memory.inc>
+#endif
 /* Guest memory the game has committed (heap size + mapped alias pages), for memory reports (iOS app monitor). */
 void runtime_guest_committed(uint64_t *heap_bytes,uint64_t *alias_mapped){*heap_bytes=heap_size;*alias_mapped=alias_bytes;}
 /* Physical memory behind the guest regions (stack+heap and alias): resident pages, of which dirty, and pages the system
@@ -456,9 +445,9 @@ void *runtime_override(const char *name) {
  void *opusms=runtime_ns2_opus_ms_override(name);if(opusms)return opusms;
  void *offline=runtime_offline_override(name);if(offline)return offline;
  #endif
- #ifdef GAME_BOTW190
- extern void *runtime_botw_touch_override(const char *name);
- void *touch=runtime_botw_touch_override(name);if(touch)return touch;
+ #ifdef TOUCHNX_INTEGRATION
+ extern void *tnx_mng_override(const char *name);
+ void *touch=tnx_mng_override(name);if(touch)return touch;
  #endif
  void *input=runtime_input_override(name);if(input)return input;void *font=runtime_font_override(name);if(font)return font;void *codec=runtime_codec_override(name);if(codec)return codec;void *movie=runtime_movie_override(name);if(movie)return movie;void *clock=runtime_time_override(name);if(clock)return clock;void *applet=runtime_applet_override(name);if(applet)return applet;void *swkbd=runtime_swkbd_override(name);if(swkbd)return swkbd;void *account=runtime_account_override(name);if(account)return account;void *fs=runtime_fs_override(name);if(fs)return fs;void *front=runtime_front_override(name);return front?front:runtime_gfx_override(name);
 }

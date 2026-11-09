@@ -11,7 +11,7 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
-#if __has_include(<include/resource_backend.h>)
+#if defined(TOUCHNX_INTEGRATION) && __has_include(<include/resource_backend.h>)
 #include <include/resource_backend.h>
 #endif
 

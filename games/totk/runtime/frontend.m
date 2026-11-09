@@ -9,8 +9,8 @@
 #include <math.h>
 #include <pthread.h>
 #include "runtime.h"
-#ifdef GAME_BOTW190
-#include "botw_touch/bridge.h"
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/bridge.h>
 #endif
 #include "game_version.h"
 #include "totk_ui_lang.h"
@@ -126,7 +126,7 @@ static int fpsGraphEnabled;
 /* The settings panel (key 1, settings_panel.h): while it is open the game gets no keyboard or mouse input. */
 static int settingsOpen;
 static void settings_show(int open);
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
 static void touch_settings_closed(void) {}
 static void touch_preview_settings(void) {
     extern int dm_mac_show_game_settings(void *,void (*)(void));
@@ -742,13 +742,13 @@ void runtime_front_resize_aspect(double ratio){
 @end
 @implementation TOTKWindowDelegate
 -(void)windowDidBecomeKey:(NSNotification *)n{(void)n;front_playtime_tick(NO);atomic_store(&focused,1);runtime_gamepad_focus(1);
-#ifdef GAME_BOTW190
- runtime_botw_touch_preview_focus(1);
+#ifdef TOUCHNX_INTEGRATION
+ tnx_mng_preview_focus(1);
 #endif
  if(window.styleMask&NSWindowStyleMaskFullScreen)[(TOTKInputView *)window.contentView setCursorAutoHideEnabled:YES];runtime_oe_push_message(15);front_mouse_update();fprintf(stderr,"[totk] window gained focus\n");front_sr_window();}
 -(void)windowDidResignKey:(NSNotification *)n{(void)n;front_playtime_tick(YES);atomic_store(&focused,0);[(TOTKInputView *)window.contentView setCursorAutoHideEnabled:NO];front_mouse_update();runtime_gamepad_focus(0);
-#ifdef GAME_BOTW190
- runtime_botw_touch_preview_focus(0);
+#ifdef TOUCHNX_INTEGRATION
+ tnx_mng_preview_focus(0);
 #endif
  runtime_input_clear_window();runtime_oe_push_message(15);fprintf(stderr,"[totk] window lost focus\n");front_sr_window();}
 /* The process ends with the window. Save writes go straight to the files (runtime/fs_host.c), so a close in the middle of a
@@ -960,8 +960,8 @@ void runtime_front_run(void(*callback)(void)){
    [window.contentView addSubview:mirror positioned:NSWindowBelow relativeTo:bootOverlay];}
   TOTKHudBox *box=[[TOTKHudBox alloc] initWithFrame:NSZeroRect];box.autoresizingMask=NSViewMinXMargin|NSViewMinYMargin;
   [window.contentView addSubview:box positioned:NSWindowBelow relativeTo:bootOverlay];hudBox=box;
-#ifdef GAME_BOTW190
-  runtime_botw_touch_preview_attach((__bridge void *)window.contentView,touch_preview_settings);
+#ifdef TOUCHNX_INTEGRATION
+  tnx_mng_preview_attach((__bridge void *)window.contentView,touch_preview_settings);
 #endif
   /* The settings panel's FPS graph switch, one for both games (user 2026-10-29: "改成两个游戏共用 默认打开"): fps-graph.txt
      in the folder above the game's ("on" / "off"), on when there is none. */

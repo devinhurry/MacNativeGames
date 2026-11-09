@@ -11,7 +11,7 @@ uint64_t g_t0_ns;
 
 uint64_t now_ns(void){return runtime_now_ns();}
 uint64_t guest_ns(void){
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
  extern uint64_t runtime_touchnx_guest_now_ns(void);return runtime_touchnx_guest_now_ns();
 #else
  return runtime_now_ns();

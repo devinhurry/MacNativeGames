@@ -179,7 +179,7 @@ void runtime_gamepad_focus(int on);             /* Mac window focus, independent
 void runtime_gamepad_switch_left(void *controller, int x, int y);
 void runtime_gamepad_switch_right(void *controller, int x, int y);
 void runtime_gamepad_read(RuntimeGamepadState *out);
-void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch); /* BOTW: keep input origin until merging */
+void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch); /* keep input origin until merging */
 extern int (*runtime_vr_pad)(int plain, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);   /* zeldaVR: set by gfx/nvn/totk_vr.m while VR runs (the Quest 3 controllers) */
 /* Mac software keyboard: exclusive controller capture; UI reads physical positions (controller_map.h),
    independent of gameplay remaps. Main-thread only. Closing waits for release before gameplay resumes. */

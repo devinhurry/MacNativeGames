@@ -1,6 +1,5 @@
 /* Native ARM64 module loader. Guest images and generated metadata stay local. */
 #include "runtime.h"
-#include "observation.h"
 #include "totk_ui_lang.h"
 #include <TargetConditionals.h>
 #include <dlfcn.h>
@@ -22,8 +21,9 @@
 #include "game_data.h"
 #include "game_patches.h"
 #include "game_version.h"
-#ifdef GAME_BOTW190
-#include "botw_touch/bridge.h"
+#ifdef TOUCHNX_INTEGRATION
+#include <adapters/macnativegames/runtime/observation.h>
+#include <runtime/bridge.h>
 #endif
 #include <errno.h>
 pthread_key_t runtime_keys[8];
@@ -85,10 +85,12 @@ static void load_tables(void) {
   Gate *gates=malloc((t->ngate?t->ngate:1)*sizeof *gates);need(gates!=NULL,"game tables memory");
   memcpy(gates,b+t->gates,t->ngate*sizeof *gates);qsort(gates,t->ngate,sizeof *gates,gate_order);
   for(unsigned k=1;k<t->ngate;k++)need(gates[k].ret>gates[k-1].ret,"game tables: two gates with one return address");
+#ifdef TOUCHNX_INTEGRATION
   for(unsigned k=0;k<t->ngate;k++){
    need(gates[k].timer<=3,"game tables: unknown gate kind");
    if(gates[k].timer==3)runtime_observation_register(gates[k].arg);
   }
+#endif
   m->gates=gates;
  }
  probe_plt=h->probe_plt;probe_slot=h->probe_slot;
@@ -384,7 +386,7 @@ uint64_t runtime_now_ns(void) {mach_timebase_info_data_t tb;mach_timebase_info(&
 #define GUEST_TICKS(ns) ((ns)*12/625)
 #endif
 void runtime_dispatch(uint64_t ret,uint64_t *regs) {
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
  extern void runtime_touchnx_settings_checkpoint(void);runtime_touchnx_settings_checkpoint();
 #endif
  for(unsigned i=0;i<NM;i++) {
@@ -393,10 +395,12 @@ void runtime_dispatch(uint64_t ret,uint64_t *regs) {
   while(lo<hi){unsigned m=(lo+hi)/2;if(b+modules[i].gates[m].ret<ret)lo=m+1;else hi=m;}
   if(lo==modules[i].ngate||b+modules[i].gates[lo].ret!=ret)continue;
   const Gate *g=&modules[i].gates[lo];
+#ifdef TOUCHNX_INTEGRATION
   if(g->timer==3){runtime_observation_dispatch(g->arg,regs);return;}
+#endif
   if(g->timer==2){runtime_spin_wait(i,g->original);return;}   // spin wait (patch_nso.py "Spin waits"): no register changes
   if(g->timer){mach_timebase_info_data_t tb;mach_timebase_info(&tb);__uint128_t ns=(__uint128_t)mach_absolute_time()*tb.numer/tb.denom;
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
    extern uint64_t runtime_touchnx_guest_now_ns(void);ns=runtime_touchnx_guest_now_ns();
 #endif
    need(g->arg<31&&g->arg!=18,"timer target register");regs[g->arg]=(uint64_t)GUEST_TICKS(ns);__atomic_fetch_add(&timer_calls,1,__ATOMIC_RELAXED);return;}
@@ -662,8 +666,8 @@ int main(int argc,char **argv) {
  for(unsigned i=0;i<NM;i++)map_module(&modules[i],argv[1]);
  for(unsigned i=0;i<NM;i++)relocate(&modules[i]);
  for(unsigned i=0;i<NM;i++)if(!strcmp(modules[i].name,"main"))runtime_game_patches(&modules[i]);
-#ifdef GAME_BOTW190
- runtime_botw_touch_install(modules,NM);
+#ifdef TOUCHNX_INTEGRATION
+ tnx_mng_install_observers(modules,NM);
 #endif
 #if !TARGET_OS_IPHONE
  if(!strcmp(argv[2],"export-ios")){const char *out=getenv("TOTK_EXPORT_IOS");need(out!=NULL,"export-ios needs TOTK_EXPORT_IOS=<dir>");export_ios_text(argv[1],out);return 0;}
@@ -680,8 +684,8 @@ int main(int argc,char **argv) {
  if(!strcmp(argv[2],"probe-vr-resolution")){extern void runtime_vr_resolution_probe(void);runtime_vr_resolution_probe();return 0;}
 #endif
 #endif
-#ifdef GAME_BOTW190
- if(!strcmp(argv[2],"probe-gpu-botw-touch")){runtime_gpu_path_probe(argv[2]);return 0;}
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/gpu_probe_dispatch.inc>
 #endif
  if(!strcmp(argv[2],"probe-gpu-vr-ui-layout")||!strcmp(argv[2],"probe-gpu-visibility")||!strcmp(argv[2],"probe-gpu-writeback")||!strcmp(argv[2],"probe-gpu-sampler-border")||!strcmp(argv[2],"probe-gpu-pool-retire")||!strcmp(argv[2],"probe-gpu-tex-slots")||!strcmp(argv[2],"probe-gpu-arg-epoch")||!strcmp(argv[2],"probe-gpu-anomaly")||!strcmp(argv[2],"probe-gpu-vertex-streams")||!strcmp(argv[2],"probe-gpu-vin")||!strcmp(argv[2],"probe-gpu-fout")||!strcmp(argv[2],"probe-gpu-pipeline-archive")||!strcmp(argv[2],"probe-gpu-layer-merge")||!strcmp(argv[2],"probe-gpu-cube-merge")||!strcmp(argv[2],"probe-gpu-texture-retire")||!strcmp(argv[2],"probe-gpu-texels-region")||!strcmp(argv[2],"probe-gpu-linear-rt")||!strcmp(argv[2],"probe-gpu-storage-view")||!strcmp(argv[2],"probe-gpu-compressed-alias")||!strcmp(argv[2],"probe-gpu-upload-batch")||!strcmp(argv[2],"probe-gpu-ds-clear")||!strcmp(argv[2],"probe-gpu-ub-rename")||!strcmp(argv[2],"probe-gpu-ubo-snapshot")||!strcmp(argv[2],"probe-gpu-drv-c0")||!strcmp(argv[2],"probe-gpu-dispatch-chain")||!strcmp(argv[2],"probe-gpu-copy-alias")||!strcmp(argv[2],"probe-gpu-srgb-view")||!strcmp(argv[2],"probe-gpu-depth-output"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-memory"))runtime_memory_probe();else if(!strcmp(argv[2],"probe-gfx"))runtime_gfx_probe(0);else if(!strcmp(argv[2],"probe-vpool"))runtime_vpool_probe();else if(!strcmp(argv[2],"probe-gpu-widen")||!strcmp(argv[2],"probe-gpu-blockrt")||!strcmp(argv[2],"probe-gpu-midclear")||!strcmp(argv[2],"probe-gpu-winding")||!strcmp(argv[2],"probe-gpu-tile"))runtime_gpu_path_probe(argv[2]);else if(!strcmp(argv[2],"probe-audio"))runtime_audio_probe();else if(!strcmp(argv[2],"probe-gfx-negative"))runtime_gfx_probe(1);else if(!strcmp(argv[2],"probe"))probe();else if(!strcmp(argv[2],"probe-fs"))runtime_fs_probe();else if(!strcmp(argv[2],"seed-shaders")){if(argc<4)runtime_fail("seed-shaders needs the corpus: <modules> seed-shaders <corpus.bin> (scripts/ns2_shader_corpus.py)");runtime_shader_seed(argv[3],argc>4?argv[4]:NULL);}else if(!strcmp(argv[2],"probe-swkbd"))runtime_swkbd_probe();else if(!strcmp(argv[2],"probe-save"))runtime_save_probe();else if(!strcmp(argv[2],"boot")){if(getenv("TOTK_VERIFY_STARTUP")||getenv("TOTK_HEADLESS"))boot();else runtime_front_run(boot);}else runtime_fail("unknown mode");return 0;
 }

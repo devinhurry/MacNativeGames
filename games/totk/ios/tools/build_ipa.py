@@ -2,7 +2,7 @@
 """Build an unsigned, sideloadable iPhone/iPad IPA from a prepared work tree: Tears of the Kingdom (v0, v121, v143)
 or Breath of the Wild (botw160, botw190; the runtime and graphics layer built with GAME_BOTW, game_patches_botw.c, its own
 shader list and the add-on content beside the RomFS)."""
-import argparse, json, os, plistlib, shutil, subprocess, sys, time
+import argparse, json, os, plistlib, runpy, shutil, subprocess, sys, time
 from pathlib import Path
 from compile_seed import METAL_FLAGS
 from device_pipelines import SCHEMA, connected_gpus, seed_check
@@ -148,8 +148,8 @@ def main():
     p.add_argument('--platform',choices=['ios','visionos'],default='ios')
     p.add_argument('--device-gpu',action='append',default=[],metavar='ARCH',help='compile the pipeline archive here for this device GPU (applegpu_g14p: iPhone 14); auto (default): the iPhones / iPads on the cable; none')
     p.add_argument('--image-outside',action='store_true',help='leave romfs.bin out: the device keeps it in Documents/GameData');p.add_argument('--app-name',default='Tears of the Kingdom');p.add_argument('--bundle-id',default='org.macnativegames.totk')
-    p.add_argument('--reuse-graphics',type=Path,help='BOTW 1.9.0: reuse native .pack.000, a seed folder, or an older .graphics package without compiling shaders')
-    p.add_argument('--skip-romfs-package',action='store_true',help='BOTW 1.9.0: reuse previously verified game-data requirements and only update the IPA')
+    p.add_argument('--reuse-graphics',type=Path,help='reuse a verified graphics package without compiling shaders')
+    p.add_argument('--skip-romfs-package',action='store_true',help='reuse previously verified game-data requirements and only update the IPA')
     a=p.parse_args(); tree=a.tree.resolve(); ios=tree/'ios';gen=ios/'Gen';logs=a.logs.resolve(); out=a.out.resolve()
     if out.suffix.lower() not in ('.ipa','.app'): raise RuntimeError('iOS output path must end in .ipa (or .app: the unsigned folder)')
     env=dict(os.environ,DEVELOPER_DIR=developer_dir())
@@ -160,22 +160,19 @@ def main():
     if not shutil.which('xcodegen'): raise RuntimeError('install xcodegen: brew install xcodegen')
     gen.mkdir(parents=True,exist_ok=True)
     botw=a.version.startswith('botw')
-    three_packages=a.version=='botw190'
+    integration = runpy.run_path(os.environ['TOUCHNX_MNG_IOS_PROJECT']) if os.environ.get('TOUCHNX_INTEGRATION')=='1' else None
+    three_packages=bool(integration and integration.get('EXTERNAL_PACKAGES'))
     if (a.reuse_graphics or a.skip_romfs_package) and not three_packages:
-        raise RuntimeError('resource-package reuse is only supported for BOTW 1.9.0')
+        raise RuntimeError('resource-package reuse requires the TouchNX integration')
     if three_packages:
-        sys.path.insert(0,str(tree/'scripts'))
-        import resource_packages
-        if a.reuse_graphics:
-            resource_packages.validate_graphics(tree,a.reuse_graphics,sdk_name)
-        if a.skip_romfs_package:
-            resource_packages.cached_romfs_requirements(tree)
+        integration['validate_reuse'](tree,a.reuse_graphics,a.skip_romfs_package,sdk_name)
     ns2=a.version in ('dkb','pkp')
     # The runtime's tables and hashes from the player's files (runtime/game_data.h) go into the app as files, not into its code.
     game_data=tree/f'build/game-data/{a.version}'
     if not (game_data/'runtime-tables.bin').is_file(): raise RuntimeError(f'missing game data: {game_data} (make game-data-{a.version})')
     # Export the final code after all verified runtime patches have been applied, then embed it in executable segments.
     host=tree/('build/totk-native' if a.version=='v0' else f'build/totk-native-{a.version}')
+    if os.environ.get('TOUCHNX_INTEGRATION')=='1': host=host.with_name(host.name+'-touchnx')
     rewritten=tree/f'rewritten/{a.version}'; modules=gen/'modules';modules.mkdir(exist_ok=True)
     # The Settings pane chooses the scene size at launch, but the size patch is code the phone cannot write: export
     # with one valid size so the patch is embedded, then the device's own TOTK_RENDER_RES (main.m from the pane) drives
@@ -186,7 +183,7 @@ def main():
     flags=subprocess.check_output([sys.executable,ios/'tools/gen_embed.py',rewritten,gen/'embed.S','--text-dir',modules,*names],text=True,env=env).strip()
     # The app's sources use version-specific patch and generated runtime tables.
     project=project_for_platform((ios/'project.yml').read_text(),a.platform)
-    if not ns2:   # This host service belongs only to the Switch 2 targets, as in the Mac Makefile.
+    if integration and not ns2:   # Match the native Mac source list for the integration build.
         project=project.replace('          - loader.c','          - loader.c\n          - offline_host.c',1)
     # The Settings pane, copied so it can be changed for the game and given its languages (settings_strings.py: one language,
     # the device's, instead of every row in Chinese and English).
@@ -206,23 +203,16 @@ def main():
         (settings/'Root.plist').write_bytes(plistlib.dumps(root))
     elif a.version=='v143': project=project.replace('          - loader.c','          - loader.c\n          - game_patches.c')
     else: project=project.replace('          - loader.c','          - loader.c\n          - game_patches_v143.c')
-    if a.version=='botw190':
+    if os.environ.get('TOUCHNX_INTEGRATION')=='1':
         touchnx=Path(os.environ.get('TOUCHNX_ROOT', tree.parents[2]/'touchnx')).resolve()
         if not (touchnx/'include/module.modulemap').is_file(): raise SystemExit(f'TouchNX checkout not found: {touchnx}; set TOUCHNX_ROOT')
         run([sys.executable,touchnx/'tools/generate_present.py'],tree,logs/'touchnx-present-source.log',env)
-        project=project.replace('      - path: Gen/embed.S',
-            f'      - path: {touchnx}/ui/apple/shared\n      - path: {touchnx}/ui/apple/ios\n      - path: {touchnx}/games/botw/ui/apple/shared\n      - path: {touchnx}/games/botw/ui/apple/ios\n      - path: {touchnx}/games/botw/backends/macnativegames/ios\n      - path: ../runtime/botw_touch\n        excludes:\n          - tests\n          - preview_mac.m\n          - README.md\n          - ORIGIN.tsv\n          - module.modulemap\n      - path: Gen/embed.S')
-        project=project.replace('      - sdk: CoreHaptics.framework','      - sdk: libarchive.tbd\n      - sdk: CoreHaptics.framework')
-        project=project.replace('      HEADER_SEARCH_PATHS:',
-            f'      SWIFT_VERSION: "5.0"\n      SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) GAME_BOTW190 DM_HOST_UI\n      SWIFT_INCLUDE_PATHS: $(inherited) {touchnx}/include {touchnx} {touchnx}/games/botw/runtime {touchnx}/games/botw/backends/macnativegames/runtime {touchnx}/games/botw/include\n      HEADER_SEARCH_PATHS:')
-        project=project.replace('          - UIInterfaceOrientationLandscapeLeft',
-            '          - UIInterfaceOrientationPortrait\n          - UIInterfaceOrientationPortraitUpsideDown\n          - UIInterfaceOrientationLandscapeLeft')
+        project=integration['add_sources'](project,touchnx)
 
     settings_strings.localize(settings)   # after the game's own changes to the pane
     if not botw and not ns2 and a.version!='v0': project=project.replace('-I../build\n','-I../build -DTOTK_GAME_'+a.version.upper()+'=1\n')
-    if a.version=='botw190':
-        touch_includes=[touchnx,touchnx/'include',touchnx/'games/botw/runtime',touchnx/'core/saves',touchnx/'games/botw/backends/macnativegames/runtime',touchnx/'games/botw/backends/macnativegames/ios',touchnx/'ui/apple/ios',tree/'runtime',ios/'Sources']
-        project=project.replace('      OTHER_CFLAGS: $(inherited)', '      OTHER_CFLAGS: $(inherited) '+ ' '.join('-I'+str(path) for path in touch_includes))
+    if os.environ.get('TOUCHNX_INTEGRATION')=='1':
+        project=integration['add_flags'](project,touchnx,tree,ios)
     project=configure_app_icon(tree,gen,project,logs,env,vision)
     (ios/'project.generated.yml').write_text(project)
     # Build device dependencies separately: Homebrew's Mac archives cannot be linked into an iOS application.
@@ -290,8 +280,8 @@ def main():
     dest=out if out.suffix=='.app' else tree/'build/ios-payload/Payload/TOTK.app'
     discard(dest,beside=dest.parent.parent if out.suffix!='.app' else None)   # not in Payload, which is zipped whole
     copy_tree(app,dest)
-    if a.version=='botw190': run([sys.executable,touchnx/'tools/stage_resources.py','--game','botw190','--platform','ios','--bundle',dest,
-                                '--romfs',tree/'extracted/botw190/romfs'],tree,logs/'touchnx-ui-resources.log',env)
+    if os.environ.get('TOUCHNX_INTEGRATION')=='1': run([sys.executable,os.environ['TOUCHNX_RESOURCE_STAGER'],'--game',os.environ['TOUCHNX_GAME'],'--platform','ios','--bundle',dest,
+                                '--romfs',tree/f'extracted/{a.version}/romfs'],tree,logs/'touchnx-ui-resources.log',env)
     res=dest/'GameData';res.mkdir(exist_ok=True)
     copy_tree(game_data,res/'game-data')   # TOTK_GAME_DATA (Sources/main.m)
     romfs=tree/f'extracted/{a.version}/romfs'
@@ -391,7 +381,7 @@ def main():
             if state!='ok': raise RuntimeError(f'{seed_out}: {line}')
         if a.image_outside and not three_packages: print(f'shader seed: {seed_out} (install_device.py puts it into Documents once per content)')
     if three_packages:
-        results=resource_packages.build_packages(tree,out,seed,dest/'dm',sdk_name,a.reuse_graphics,a.skip_romfs_package,native=True)
+        results=integration['build_packages'](tree,out,seed,dest/'dm',sdk_name,a.reuse_graphics,a.skip_romfs_package)
         for item in results:
             print(f"{item['kind']} package: {item['status']} {item.get('path','')}",flush=True)
     if out.suffix=='.app':   # the unsigned app as a folder, for install_device.py: no 100,000-file zip

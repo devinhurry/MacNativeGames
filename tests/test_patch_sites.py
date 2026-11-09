@@ -5,6 +5,9 @@ extraction stops following it, one of these fails instead of the build silently 
 a site the runtime writes over.
 """
 import json
+import os
+import tempfile
+from unittest.mock import patch
 import subprocess
 import sys
 import unittest
@@ -185,14 +188,16 @@ class Extraction(unittest.TestCase):
         self.assertIn(0xe12d8c, with_id)                # PARAMS: an output-resolution parameter site
         self.assertNotIn(0x8524c4, offsets('v0', OTHER))
 
-    def test_botw_touch_observers_reserve_every_site_including_camera_parameters(self):
-        build = 'cd57b23fa4bbad65803d9788c01821ee'
-        expected = {0x276a0, 0x27ae4, 0x27d7c, 0x27d84, 0xf714b8, 0xeb4468,
-                    0xd44a2c, 0xe1a628, 0xd58008, 0xd5801c, 0xbf0c4c, 0xbf2ccc,
-                    0xbf0e34, 0xbf2f90, 0xf57ba0, 0xf57a08, 0xd6f034}
-        sites = patch_sites.rewriter_sites(build)
-        self.assertEqual({site.offset for site in sites if site.label == 'patch_nso.py OBS'}, expected)
-        self.assertTrue(all(site.size == 4 for site in sites if site.label == 'patch_nso.py OBS'))
+    def test_external_observers_are_reserved_only_when_the_profile_is_selected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            profile = Path(folder) / 'profile.py'
+            profile.write_text("def sites(build_id):\n    return [(0x1234, 42, '11223344', 'test')] if build_id == 'cd' * 16 else []\n")
+            with patch.dict(os.environ, {'TOUCHNX_REWRITE_PROFILE': str(profile)}):
+                sites = patch_sites.rewriter_sites('cd' * 16)
+                self.assertIn(patch_sites.Site('external OBS', 0x1234, 4), sites)
+                self.assertEqual(patch_sites.rewriter_sites('ef' * 16), [])
+            with patch.dict(os.environ, {}, clear=True):
+                self.assertNotIn(0x1234, {site.offset for site in patch_sites.rewriter_sites('cd' * 16)})
 
     def test_a_cut_keeps_its_length(self):
         found = {site.offset: site for site in patch_sites.sites('v0', BUILD_ID_V0)}

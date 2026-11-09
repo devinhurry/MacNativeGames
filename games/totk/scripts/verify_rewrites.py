@@ -14,6 +14,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import rewriter_profile
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -43,7 +45,7 @@ def main():
     analysis.mkdir(parents=True, exist_ok=True)
     vendor = ROOT / 'third_party/d2r'
     outputs = ROOT / f'rewritten/{version}'
-    source_hash = digest(vendor / 'patch_nso.py')
+    source_hash = rewriter_profile.fingerprint(vendor / 'patch_nso.py', rewriter_profile.load())
     if (outputs / 'build_src.sha256').read_text().split()[0] != source_hash:
         raise RuntimeError('Rewrite source changed since artifacts were generated; rebuild first')
     environment = os.environ.copy()

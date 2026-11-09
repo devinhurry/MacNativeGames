@@ -5,7 +5,7 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
-#if __has_include(<include/resource_backend.h>)
+#if defined(TOUCHNX_INTEGRATION) && __has_include(<include/resource_backend.h>)
 #include <include/resource_backend.h>
 #endif
 
@@ -202,15 +202,7 @@ static void sha_range(int fd,uint64_t offset,uint64_t size,const char *expected,
  if(strcmp(hex,expected)){fprintf(stderr,"[totk] RomFS overlay: %s SHA-256 %s, manifest says %s\n",what,hex,expected);runtime_fail("RomFS overlay integrity mismatch");}
 }
 #ifdef TOUCHNX_RESOURCE_READER
-static void resource_original(const char *name,const char *expected) {
- char logical[4096];need(snprintf(logical,sizeof logical,"romfs/%s",name)<(int)sizeof logical,"resource path");
- tnx_resource_file *file=tnx_resource_open(logical);if(!file)runtime_fail(tnx_resources_error());
- CC_SHA256_CTX hash;CC_SHA256_Init(&hash);uint8_t *buffer=malloc(8<<20);need(buffer!=NULL,"hash buffer");
- uint64_t size=tnx_resource_size(file),done=0;
- while(done<size){ssize_t n=tnx_resource_read(file,buffer,(size_t)(size-done>(8<<20)?(8<<20):size-done),done);if(n<=0)runtime_fail(tnx_resources_error());CC_SHA256_Update(&hash,buffer,(CC_LONG)n);done+=(uint64_t)n;}
- uint8_t digest[32];char text[65];CC_SHA256_Final(digest,&hash);free(buffer);tnx_resource_close(file);
- for(unsigned i=0;i<32;i++)snprintf(text+i*2,3,"%02x",digest[i]);need(!strcmp(text,expected),"RomFS overlay original integrity mismatch");
-}
+#include <adapters/macnativegames/runtime/resource_original.inc>
 #endif
 static uint64_t lower(const char *name);
 static int path_ok(const char *p);

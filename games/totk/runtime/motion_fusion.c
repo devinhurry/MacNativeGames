@@ -188,44 +188,14 @@ static void bias_sample(const double acc[3], const double gyro[3], uint64_t now)
     }
     win_n = 0;
 }
-#ifdef GAME_BOTW190
-static _Atomic int botw_motion_mode;
-static pthread_once_t botw_motion_once=PTHREAD_ONCE_INIT;
-static uint64_t botw_controller_received;
-static int botw_selected_source=-1;
-static int botw_motion_parse(const char *source) {
-    if(!source || !strcmp(source,"auto"))return 0;
-    if(!strcmp(source,"off"))return 1;
-    if(!strcmp(source,"controller"))return 2;
-    if(!strcmp(source,"device"))return 3;
-    return -1;
-}
-static void botw_motion_config(void) {
-    int mode=botw_motion_parse(getenv("DM_MOTION_SOURCE"));if(mode<0)runtime_fail("invalid DM_MOTION_SOURCE");atomic_store(&botw_motion_mode,mode);
-}
-void dm_motion_source_set(const char *source) {
-    int mode=botw_motion_parse(source);if(mode<0)return;pthread_once(&botw_motion_once,botw_motion_config);atomic_store(&botw_motion_mode,mode);
-    runtime_motion_start();
-#if TARGET_OS_IPHONE
-    extern void totk_phone_motion_source_changed(void);totk_phone_motion_source_changed();
-#endif
-}
-const char *dm_motion_source_get(void) {
-    pthread_once(&botw_motion_once,botw_motion_config);static const char *names[]={"auto","off","controller","device"};return names[atomic_load(&botw_motion_mode)];
-}
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/motion_policy.inc>
 #endif
 static void motion_feed_source(const double raw_acc[3],const double raw_gyro[3],uint64_t now,int device) {
     double acc[3], gyro[3];
     pthread_mutex_lock(&lock);
-#ifdef GAME_BOTW190
-    pthread_once(&botw_motion_once,botw_motion_config);int mode=atomic_load(&botw_motion_mode);uint64_t received=runtime_now_ns();
-    if(!device)botw_controller_received=received;
-    if(mode==1 || (mode==2 && device) || (mode==3 && !device) ||
-       (!mode && device && botw_controller_received && received-botw_controller_received<300000000ull)) { pthread_mutex_unlock(&lock);return; }
-    if(botw_selected_source!=device) {
-        botw_selected_source=device;restart=1;last_ns=0;win_n=0;
-        if(bias_mode!=2){bias_known=0;memset(bias,0,sizeof bias);}
-    }
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/motion_sample.inc>
 #else
     (void)device;
 #endif

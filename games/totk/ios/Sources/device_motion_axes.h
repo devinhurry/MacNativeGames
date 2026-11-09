@@ -9,9 +9,12 @@ enum { DEVICE_MOTION_UI_PORTRAIT = 1, DEVICE_MOTION_UI_PORTRAIT_UPSIDE_DOWN = 2,
    and rotation rate map alike. */
 static inline void device_motion_to_landscape(int ui_orientation, const double in[3], double out[3]) {
     const double x = in[0], y = in[1], z = in[2];
+#ifdef TOUCHNX_INTEGRATION
     if (ui_orientation == DEVICE_MOTION_UI_PORTRAIT) { out[0] = x; out[1] = y; }
     else if (ui_orientation == DEVICE_MOTION_UI_PORTRAIT_UPSIDE_DOWN) { out[0] = -x; out[1] = -y; }
-    else if (ui_orientation == DEVICE_MOTION_UI_LANDSCAPE_LEFT) { out[0] = y; out[1] = -x; }
+    else
+#endif
+    if (ui_orientation == DEVICE_MOTION_UI_LANDSCAPE_LEFT) { out[0] = y; out[1] = -x; }
     else { out[0] = -y; out[1] = x; }
     out[2] = z;
 }

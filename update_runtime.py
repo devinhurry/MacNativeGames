@@ -212,7 +212,8 @@ def check_overlays(res, version):
 
 def rewriter_sha256():
     """The SHA-256 of this repository's rewriter, as patch_nso.py records itself in build_src.sha256."""
-    return sha256(build_app.GAME / 'third_party/d2r/patch_nso.py')
+    return build_app.rewriter_profile.fingerprint(
+        build_app.GAME / 'third_party/d2r/patch_nso.py', build_app.rewriter_profile.load())
 
 
 def check_rewriter(data, res, version, want):
@@ -224,7 +225,8 @@ def check_rewriter(data, res, version, want):
     written by prepare_runtime.py from build_src.sha256): another one may have put other gates into the code, or left out
     fixes that moved from the runtime into the rewriter (Breath of the Wild 1.9.0's job-queue spin wait, a038e6b /
     470aa5f), and this runtime would not know. Such an app needs build_app.py, which rewrites the modules."""
-    pinned = VERSIONS[version].get('rewritten_sha256') or {}
+    pinned = build_app.rewriter_profile.expected_rewritten(
+        VERSIONS[version].get('rewritten_sha256') or {}, version, build_app.rewriter_profile.load())
     if pinned and all(sha256(res / f'rewritten/{version}/{name}') == digest for name, digest in pinned.items()):
         return
     try:

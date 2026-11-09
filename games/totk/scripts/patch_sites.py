@@ -31,6 +31,8 @@ import sys
 from collections import namedtuple
 from pathlib import Path
 
+import rewriter_profile
+
 ROOT = Path(__file__).resolve().parents[1]          # games/totk
 RUNTIME = ROOT / 'runtime'
 REWRITER = ROOT / 'third_party/d2r/patch_nso.py'
@@ -346,7 +348,7 @@ def rewriter_sites(build_id):
             for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*[\'"]([0-9a-fA-F]*)[\'"]', body):
                 found.append(Site('patch_nso.py CUTS', int(match.group(1), 16), len(match.group(2)) // 2))
         elif table == 'OBS':     # (offset, observation number, original word, reason)
-            # An observation can encode its camera parameter above the low byte (42 | 1 << 8).
+            # An observation can encode an additional parameter above the low byte (42 | 1 << 8).
             for match in re.finditer(r'\([ \t]*(0x[0-9a-fA-F]+)[ \t]*,[ \t]*[^,\n]+,', body):
                 found.append(Site('patch_nso.py OBS', int(match.group(1), 16), 4))
         else:                    # (offset a, word a, offset b, word b, register, key, reason)
@@ -354,6 +356,9 @@ def rewriter_sites(build_id):
                                      r'[ \t]*,[ \t]*(0x[0-9a-fA-F]+)', body):
                 for offset in match.groups():
                     found.append(Site('patch_nso.py PARAMS', int(offset, 16), 4))
+    profile = rewriter_profile.load()
+    if profile:
+        found.extend(Site('external OBS', row[0], 4) for row in profile['sites'](build_id))
     return found
 
 

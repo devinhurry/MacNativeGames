@@ -25,6 +25,9 @@
 #include "../runtime/game_version.h"
 #include "../runtime/controller_map.h"
 #include "../runtime/runtime.h"
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/bridge.h>
+#endif
 #include "../third_party/d2r_gfx/gfx/nvn/include/totk_ui_lang.h"
 #include "../third_party/d2r_gfx/gfx/nvn/totk_shader_contrib.h"
 #include "../runtime/contrib_submit.h"
@@ -347,9 +350,8 @@ int runtime_app_launch(int argc, char **argv, char ***boot) {
         NSString *home = NSHomeDirectory();
         NSString *data = [home stringByAppendingPathComponent:@"Library/Application Support/MacNativeGames/" GAME_FOLDER];   /* game_version.h: TOTK, BotW */
         NSString *logs = [home stringByAppendingPathComponent:@"Library/Logs/MacNativeGames"];
-#ifdef GAME_BOTW190
-        data=[home stringByAppendingPathComponent:@"Library/Application Support/TouchNX/macnativegames/BotW"];
-        logs=[home stringByAppendingPathComponent:@"Library/Logs/TouchNX/macnativegames"];
+#ifdef TOUCHNX_INTEGRATION
+#include <runtime/launch_paths.inc>
 #endif
         /* Folders the environment already names are kept (open --env TOTK_PROFILE_DIR=... runs a test on a save copy,
            TOTK_GAME_SLOT_DIR shares one game slot with another build of the game: one game at a time on the Mac). */
@@ -501,12 +503,13 @@ int runtime_app_launch(int argc, char **argv, char ***boot) {
             dup2(fileno(lf), STDERR_FILENO);
             fclose(lf);
         }
-#ifdef GAME_BOTW190
+#ifdef TOUCHNX_INTEGRATION
         setenv("DM_SAVES_ROOT",profile.fileSystemRepresentation,1);
         NSString *launcher=[NSBundle.mainBundle.resourcePath stringByAppendingPathComponent:@"dm/launcher.json"];
         setenv("DM_LAUNCHER_FILE",launcher.fileSystemRepresentation,1);
+        extern void tnx_mng_launcher_prepare(void);tnx_mng_launcher_prepare();
         extern int dm_mac_launcher(void);if(!dm_mac_launcher())return 0;
-        extern void runtime_botw_launcher_apply_startup(void);runtime_botw_launcher_apply_startup();
+        extern void tnx_mng_launcher_apply_startup(void);tnx_mng_launcher_apply_startup();
 #endif
         setenv("TOTK_UPDATE_LAUNCHER", NSBundle.mainBundle.executablePath.fileSystemRepresentation, 1);
         static char *arguments[4] = {NULL, "rewritten/" TOTK_GAME_DIR, "boot", NULL};

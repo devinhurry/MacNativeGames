@@ -20,7 +20,7 @@ def parse_gate(line):
     assert kind in kinds, 'unknown gate kind'
     arg = int(arg)
     assert 0 <= arg <= 0xffffffff, 'gate argument out of range'
-    assert kind != 'obs' or 0 < (arg & 0xff) < 44, 'observation gate number out of range'
+    assert kind != 'obs' or (arg & 0xff) != 0, 'observation gate number out of range'
     return dict(ret=int(ret, 0), timer=kinds[kind], arg=arg, original=int(original, 0))
 
 parser = argparse.ArgumentParser(description=__doc__)
