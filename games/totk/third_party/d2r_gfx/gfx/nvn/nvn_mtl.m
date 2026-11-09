@@ -15084,6 +15084,7 @@ frz_plain:;
         sc = (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
     }
 #endif
+    MNG_GFX_TRANSFORM_SCISSOR(sc,tw,th);
     double native_vp[4]={vx+jx,vy+jy,vw,vh};
     vr_native_ui_layout(pr,native_vp,&sc,(unsigned)tw,(unsigned)th);
     if(native_output){native_vp[0]=native_vp[1]=0;native_vp[2]=native_output_width;native_vp[3]=native_output_height;

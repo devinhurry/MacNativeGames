@@ -1930,10 +1930,13 @@ void runtime_game_patches(Module *m) {
     /* VR head look widens the game's field of view to the headset's through the Vert+ stubs (runtime_aspect_vr) */
     { const char *ctl=getenv("TOTK_VR_CONTROL"),*hl=getenv("TOTK_VR_HEADLOOK"); if(ctl&&*ctl&&!(hl&&!strcmp(hl,"0")))setenv("TOTK_ASPECT_VERT","1",0); }
 #endif
+#ifndef MNG_EXTERNAL_ASPECT
     { static const uint64_t sites[] = {0x628c74, 0xb43460, 0x1ff04f4, 0x253fbb0};   /* camera update and setup, viewport x2 */
       aspect_install(m, "1.4.3", sites, 4, 2, ((m->text_end + 15) & ~15ULL) + 48,   /* after the two veneers above */
                      ((m->text_end + 15) & ~15ULL) + 320,   /* Vert+ stubs (2 x 304 bytes): after the bounce veneer at +256, before the rewriter's code at +1024 */
-                     (m->file_size + 0x3fff) & ~0x3fffULL); }
+                     (m->file_size + 0x3fff) & ~0x3fffULL);
+    }
+#endif
 #if !TARGET_OS_IPHONE
     /* Not into the iOS export either (TOTK_EXPORT_IOS runs these patches on the Mac and embeds the code they leave): the
        hook branches into this Mac runtime, which the iPhone / iPad app does not have, so the exported game jumped to a

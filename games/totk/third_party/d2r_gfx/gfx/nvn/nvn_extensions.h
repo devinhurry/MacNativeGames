@@ -52,6 +52,9 @@
 #ifndef MNG_GFX_PREPARE_DRAW
 #define MNG_GFX_PREPARE_DRAW(program) ((void)0)
 #endif
+#ifndef MNG_GFX_TRANSFORM_SCISSOR
+#define MNG_GFX_TRANSFORM_SCISSOR(scissor,width,height) ((void)0)
+#endif
 #ifndef MNG_GFX_BEFORE_TARGET_CHANGE
 #define MNG_GFX_BEFORE_TARGET_CHANGE() ((void)0)
 #endif
