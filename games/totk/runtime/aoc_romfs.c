@@ -11,6 +11,7 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
+#include "romfs_verify.h"
 #ifdef MNG_RESOURCE_PROVIDER
 #include "resource_provider.h"
 #endif
@@ -35,11 +36,11 @@
 typedef struct { uint64_t offset, size; uint32_t name, len; } Entry;
 typedef struct {
     int index; uint64_t image_size; const char *image_sha, *index_sha;
-    uint8_t *index_bytes; size_t index_size; uint64_t file_count, strings_offset; int image_fd; char mount[32]; int loaded;
+    uint8_t *index_bytes; size_t index_size; uint64_t file_count, strings_offset; int image_fd; char mount[32]; int loaded; int external;
 } Vol;
 static Vol vols[AOC_MAX] = {   /* sizes and hashes: config_load */
-    {1, 0, NULL, NULL, NULL, 0, 0, 0, -1, "", 0},
-    {2, 0, NULL, NULL, NULL, 0, 0, 0, -1, "", 0},
+    {1, 0, NULL, NULL, NULL, 0, 0, 0, -1, "", 0, 0},
+    {2, 0, NULL, NULL, NULL, 0, 0, 0, -1, "", 0, 0},
 };
 static struct { uint8_t vol; uint64_t entry; } handles[AOC_NH];   /* entry = file index + 1; 0 is free */
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
@@ -118,7 +119,12 @@ static void vol_load(Vol *v) {
     if (v->loaded) return;
     need(present(v), "add-on content not extracted");
     char dir[4096], path[4200]; vol_dir(v, dir, sizeof dir);
-    need(snprintf(path, sizeof path, "%s/runtime-index.bin", dir) < (int)sizeof path, "add-on content index path");
+    const char *index_dir=dir,*data_dir=dir,*proof_path=NULL;
+#ifdef MNG_RESOURCE_PROVIDER
+    char volume[32];snprintf(volume,sizeof volume,"aoc/%d",v->index);
+    v->external=runtime_resources_active()&&!runtime_resource_native(volume,&index_dir,&data_dir,&proof_path);
+#endif
+    need(snprintf(path, sizeof path, "%s/runtime-index.bin", index_dir) < (int)sizeof path, "add-on content index path");
     int fd = open(path, O_RDONLY); need(fd >= 0, "add-on content index missing (games/botw/scripts/extract_aoc_romfs.py, then make)");
     struct stat st; need(fstat(fd, &st) == 0 && st.st_size >= 24 && st.st_size < 64 * 1024 * 1024, "add-on content index size");
     sha_fd(fd, v->index_sha, 0, "index");
@@ -132,14 +138,18 @@ static void vol_load(Vol *v) {
         const char *n = entry_name(v, e); need(n[e.len - 1] == 0 && strlen(n) == e.len - 1 && romfs_path_valid_relative(n), "add-on content file name");
         need(!previous || strcmp(previous, n) < 0, "add-on content index order"); previous = n; }
 #ifdef MNG_RESOURCE_PROVIDER
-    if(runtime_resources_active()){
+    if(v->external){
         char volume[64];snprintf(volume,sizeof volume,"aoc/%d",v->index);
         need(runtime_resource_volume(volume),"Compatible add-on content volume is missing");v->loaded=1;return;
     }
 #endif
-    need(snprintf(path, sizeof path, "%s/romfs.bin", dir) < (int)sizeof path, "add-on content image path");
+    need(snprintf(path, sizeof path, "%s/romfs.bin", data_dir) < (int)sizeof path, "add-on content image path");
     v->image_fd = open(path, O_RDONLY); need(v->image_fd >= 0, "add-on content image missing");
-    verify_image(v, dir);
+    if(proof_path){
+        char error[256];RuntimeRomfsVerification in={.fds=&v->image_fd,.parts=1,.size=v->image_size,
+            .sha256=v->image_sha,.proof_path=proof_path,.stage=TOTK_UI("校验追加内容","Verifying add-on content"),.flags=RUNTIME_ROMFS_VERIFY_STRICT};
+        need(!runtime_romfs_verify(&in,error,sizeof error),error);
+    }else verify_image(v, dir);
     v->loaded = 1;
     fprintf(stderr, "[botw] add-on content %d ready: %llu files, %llu bytes\n", v->index, (unsigned long long)v->file_count, (unsigned long long)v->image_size);
 }
@@ -189,7 +199,7 @@ unsigned runtime_aoc_open(uint64_t *out, const char *path, int mode) {
     uint64_t i = lower(v, p); if (i >= v->file_count || strcmp(p, entry_name(v, entry(v, i)))) return NOT_FOUND;
 #ifdef MNG_RESOURCE_PROVIDER
     RuntimeResourceFile *resource=NULL;
-    if(runtime_resources_active()){
+    if(v->external){
         char logical[4096];need(snprintf(logical,sizeof logical,"aoc/%d/%s",v->index,p)<(int)sizeof logical,"add-on content resource path");
         resource=runtime_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(runtime_resources_error());}
         need(runtime_resource_size(resource)==entry(v,i).size,"Add-on content size differs from the backend index");

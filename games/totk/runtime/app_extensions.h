@@ -13,6 +13,5 @@ void runtime_ios_layout_boot_overlay(UIView *overlay, UILabel *stage, UILabel *d
 void runtime_app_directories(NSString **data, NSString **logs);
 int runtime_app_prepare_launch(const char *profile);
 void runtime_front_attach(void *view, void (*settings)(void));
-void runtime_front_focus_changed(int on);
 int runtime_front_settings(void *window);
 #endif

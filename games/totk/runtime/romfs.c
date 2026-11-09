@@ -5,6 +5,7 @@
 #include "game_version.h"
 #include "fs_host.h"
 #include "romfs_path.h"
+#include "romfs_verify.h"
 #ifdef MNG_RESOURCE_PROVIDER
 #include "resource_provider.h"
 #endif
@@ -60,7 +61,7 @@ static size_t index_size;
 static uint64_t file_count,strings_offset;
 static int image_fd=-1;
 #ifdef MNG_RESOURCE_PROVIDER
-static int resources_initialized;
+static int resources_initialized,resources_external;
 static RuntimeResourceFile *resource_handles[NH];
 #endif
 /* Split image: romfs.bin.000, .001, ... of equal size (the last one shorter), read in place. The phone gets the 17 GB
@@ -121,49 +122,77 @@ typedef struct {
  uint64_t dev,ino,size;
  int64_t mtime_sec,mtime_nsec,ctime_sec,ctime_nsec,birth_sec,birth_nsec;
 } RomfsProof;
-static RomfsProof proof_for(const struct stat *s) {
- RomfsProof p={0};memcpy(p.magic,"TOTKRFS-PROOF-1",16);memcpy(p.sha256,ROMFS_IMAGE_SHA256,65);
+static RomfsProof proof_for(const struct stat *s,const char *sha) {
+ RomfsProof p={0};memcpy(p.magic,"TOTKRFS-PROOF-1",16);memcpy(p.sha256,sha,65);
  p.dev=(uint64_t)s->st_dev;p.ino=(uint64_t)s->st_ino;p.size=(uint64_t)s->st_size;
  p.mtime_sec=s->st_mtimespec.tv_sec;p.mtime_nsec=s->st_mtimespec.tv_nsec;
  p.ctime_sec=s->st_ctimespec.tv_sec;p.ctime_nsec=s->st_ctimespec.tv_nsec;
  p.birth_sec=s->st_birthtimespec.tv_sec;p.birth_nsec=s->st_birthtimespec.tv_nsec;
  return p;
 }
-static int proof_equal(const RomfsProof *a,const RomfsProof *b) {
- return !memcmp(a->magic,b->magic,sizeof a->magic)&&!memcmp(a->sha256,b->sha256,sizeof a->sha256)
-  &&a->size==b->size
+static int proof_equal(const RomfsProof *a,const RomfsProof *b,int strict) {
+ if(memcmp(a->magic,b->magic,sizeof a->magic)||memcmp(a->sha256,b->sha256,sizeof a->sha256)||a->size!=b->size)return 0;
 #if TARGET_OS_IPHONE
-  /* iOS rewrites ctime and birthtime when a sealed app bundle is read for the first time, so a fresh
-     install never matched its own before/after stat ("FAIL: RomFS changed during verification").
-     The record exists to identify the bytes, and the SHA256 pass above already proved them. */
-  ;
+ /* Preserve the native bundle/reinstall policy; externally managed files use strict identities. */
+ if(!strict)return 1;
 #else
-  &&a->dev==b->dev&&a->ino==b->ino
-  &&a->mtime_sec==b->mtime_sec&&a->mtime_nsec==b->mtime_nsec
-  &&a->ctime_sec==b->ctime_sec&&a->ctime_nsec==b->ctime_nsec
-  &&a->birth_sec==b->birth_sec&&a->birth_nsec==b->birth_nsec;
+ (void)strict;
 #endif
+ return a->dev==b->dev&&a->ino==b->ino&&a->mtime_sec==b->mtime_sec&&a->mtime_nsec==b->mtime_nsec
+  &&a->ctime_sec==b->ctime_sec&&a->ctime_nsec==b->ctime_nsec&&a->birth_sec==b->birth_sec&&a->birth_nsec==b->birth_nsec;
 }
-/* Split image: one record per part, all of which must be unchanged for the earlier full hash to be reused. */
-static void chunk_proofs(RomfsProof *out) {
- /* ctime is left out: reinstalling the iOS app touches the data container's file metadata (ctime) without changing a
-    byte, which made every launch hash 17 GB again. A content change still moves mtime (and size). */
- for(unsigned c=0;c<nchunks;c++){struct stat st;need(fstat(chunk_fds[c],&st)==0&&S_ISREG(st.st_mode),"RomFS part stat");out[c]=proof_for(&st);out[c].ctime_sec=out[c].ctime_nsec=0;}
+static int verify_error(char *error,size_t cap,const char *message) {
+ if(error&&cap)snprintf(error,cap,"%s",message);return -1;
 }
-static void verify_chunks(const char *dir) {
- RomfsProof want[MAX_CHUNKS],saved[MAX_CHUNKS],after[MAX_CHUNKS];size_t bytes=nchunks*sizeof(RomfsProof);chunk_proofs(want);
- const char *pdir=getenv("TOTK_ROMFS_PROOF_DIR");if(pdir&&*pdir)dir=pdir;   /* iOS: directories devicectl creates belong to root */
- char path[4096],tmp[4096];need(snprintf(path,sizeof(path),"%s/.romfs-verified-parts-v1",dir)<(int)sizeof(path),"RomFS proof path");
- int force=getenv("TOTK_ROMFS_VERIFY")&&!strcmp(getenv("TOTK_ROMFS_VERIFY"),"full");
- int proof_fd=open(path,O_RDONLY|O_NOFOLLOW);
- if(proof_fd>=0){struct stat ps;int ok=fstat(proof_fd,&ps)==0&&S_ISREG(ps.st_mode)&&(size_t)ps.st_size==bytes&&read(proof_fd,saved,bytes)==(ssize_t)bytes;close(proof_fd);
-  if(ok&&!force&&!memcmp(saved,want,bytes)){fprintf(stderr,"[totk] RomFS parts unchanged; reused full SHA256 verification record (%u parts)\n",nchunks);runtime_boot_progress(TOTK_UI("游戏资源校验记录有效","Game data verification record is valid"),ROMFS_IMAGE_SIZE,ROMFS_IMAGE_SIZE);return;}}
- fprintf(stderr,"[totk] verifying local RomFS SHA256 over %u parts (%llu bytes)%s\n",nchunks,(unsigned long long)ROMFS_IMAGE_SIZE,force?" [forced]":"");
- runtime_boot_progress(TOTK_UI("校验游戏资源","Verifying game data"),0,ROMFS_IMAGE_SIZE);sha_fd(image_fd,ROMFS_IMAGE_SHA256,ROMFS_IMAGE_SIZE,TOTK_UI("校验游戏资源","Verifying game data"));
- chunk_proofs(after);need(!memcmp(after,want,bytes),"RomFS changed during verification");
- if(snprintf(tmp,sizeof(tmp),"%s/.romfs-verified-parts-v1.%ld.tmp",dir,(long)getpid())>=(int)sizeof(tmp))return;
- int out=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);
- if(out>=0){ssize_t n=write(out,want,bytes);int ok=n==(ssize_t)bytes&&fsync(out)==0;close(out);if(ok){if(rename(tmp,path)!=0)unlink(tmp);}else unlink(tmp);}
+static int image_proofs(const RuntimeRomfsVerification *in,RomfsProof *proofs) {
+ uint64_t total=0,part=0;
+ for(unsigned i=0;i<in->parts;i++){
+  struct stat st;if(fstat(in->fds[i],&st)||!S_ISREG(st.st_mode)||st.st_size<=0)return -1;
+  uint64_t n=(uint64_t)st.st_size;if(i&&((i+1<in->parts&&n!=part)||n>part))return -1;
+  if(!i)part=n;if(n>UINT64_MAX-total)return -1;total+=n;proofs[i]=proof_for(&st,in->sha256);
+  if(in->parts>1&&!(in->flags&RUNTIME_ROMFS_VERIFY_STRICT))proofs[i].ctime_sec=proofs[i].ctime_nsec=0;
+ }
+ return total==in->size?0:-1;
+}
+static int verify_romfs(const RuntimeRomfsVerification *in,char *error,size_t cap) {
+ if(error&&cap)*error=0;if(in&&in->hashed_bytes)*in->hashed_bytes=0;
+ if(!in||!in->fds||!in->parts||in->parts>MAX_CHUNKS||!in->sha256||strlen(in->sha256)!=64)
+  return verify_error(error,cap,"Invalid RomFS verification input");
+ if(in->index){
+  if(!in->index_sha256||strlen(in->index_sha256)!=64||in->index_size>UINT32_MAX)return verify_error(error,cap,"Invalid RomFS index verification input");
+  unsigned char digest[32];char hex[65];CC_SHA256(in->index,(CC_LONG)in->index_size,digest);
+  for(unsigned i=0;i<32;i++)snprintf(hex+2*i,3,"%02x",digest[i]);
+  if(strcmp(hex,in->index_sha256))return verify_error(error,cap,"RomFS index integrity mismatch");
+ }
+ RomfsProof want[MAX_CHUNKS],saved[MAX_CHUNKS],after[MAX_CHUNKS];size_t bytes=in->parts*sizeof *want;
+ if(image_proofs(in,want))return verify_error(error,cap,"RomFS image size or parts changed");
+ int force=(in->flags&RUNTIME_ROMFS_VERIFY_FULL)||(getenv("TOTK_ROMFS_VERIFY")&&!strcmp(getenv("TOTK_ROMFS_VERIFY"),"full"));
+ int fd=in->proof_path?open(in->proof_path,O_RDONLY|O_NOFOLLOW):-1;
+ if(fd>=0){struct stat st;int ok=!fstat(fd,&st)&&S_ISREG(st.st_mode)&&(uint64_t)st.st_size==bytes&&read(fd,saved,bytes)==(ssize_t)bytes;close(fd);
+  if(ok&&!force){for(unsigned i=0;i<in->parts;i++)if(in->parts>1?memcmp(saved+i,want+i,sizeof *want)!=0:!proof_equal(saved+i,want+i,!!(in->flags&RUNTIME_ROMFS_VERIFY_STRICT))){ok=0;break;}
+   if(ok){fprintf(stderr,"[totk] RomFS verification cache=hit hashed=0 bytes=0\n");return 0;}}}
+ unsigned char *buffer=malloc(8<<20);if(!buffer)return verify_error(error,cap,"RomFS hash buffer allocation failed");
+ CC_SHA256_CTX hash;CC_SHA256_Init(&hash);uint64_t done=0;
+ for(unsigned i=0;i<in->parts;i++)for(uint64_t off=0;off<want[i].size;){
+  size_t count=(size_t)(want[i].size-off);if(count>(8u<<20))count=8u<<20;
+  ssize_t n;do{n=pread(in->fds[i],buffer,count,(off_t)off);}while(n<0&&errno==EINTR);
+  if(n<=0){free(buffer);return verify_error(error,cap,"RomFS read failed during verification");}
+  CC_SHA256_Update(&hash,buffer,(CC_LONG)n);off+=(uint64_t)n;done+=(uint64_t)n;
+  if(in->stage&&(done%(256u<<20)<(8u<<20)||done==in->size))runtime_boot_progress(in->stage,done,in->size);
+ }
+ free(buffer);if(in->hashed_bytes)*in->hashed_bytes=done;
+ unsigned char digest[32];char hex[65];CC_SHA256_Final(digest,&hash);
+ for(unsigned i=0;i<32;i++)snprintf(hex+2*i,3,"%02x",digest[i]);
+ if(strcmp(hex,in->sha256))return verify_error(error,cap,"RomFS integrity mismatch");
+ if(image_proofs(in,after))return verify_error(error,cap,"RomFS changed during verification");
+ for(unsigned i=0;i<in->parts;i++)if(in->parts>1?memcmp(want+i,after+i,sizeof *want)!=0:!proof_equal(want+i,after+i,!!(in->flags&RUNTIME_ROMFS_VERIFY_STRICT)))return verify_error(error,cap,"RomFS changed during verification");
+ if(in->proof_path){char tmp[4096];if(snprintf(tmp,sizeof tmp,"%s.%ld.tmp",in->proof_path,(long)getpid())<(int)sizeof tmp){
+  int out=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);if(out>=0){int ok=write(out,want,bytes)==(ssize_t)bytes&&fsync(out)==0;close(out);if(!ok||rename(tmp,in->proof_path))unlink(tmp);}}}
+ fprintf(stderr,"[totk] RomFS verification cache=miss hashed=1 bytes=%llu\n",(unsigned long long)done);return 0;
+}
+int runtime_romfs_verify(const RuntimeRomfsVerification *in,char *error,size_t cap) {
+ static pthread_mutex_t verification_lock=PTHREAD_MUTEX_INITIALIZER;
+ pthread_mutex_lock(&verification_lock);int result=verify_romfs(in,error,cap);pthread_mutex_unlock(&verification_lock);return result;
 }
 static void open_chunks(const char *dir) {
  uint64_t total=0;
@@ -176,24 +205,13 @@ static void open_chunks(const char *dir) {
  image_fd=chunk_fds[0];
  fprintf(stderr,"[totk] RomFS image in %u parts of %llu bytes\n",nchunks,(unsigned long long)chunk_size);
 }
-static void verify_image(int fd,const char *dir) {
- if(nchunks){verify_chunks(dir);return;}
+static void verify_image(int fd,const char *dir,const char *provided_proof) {
  const char *pdir=getenv("TOTK_ROMFS_PROOF_DIR");if(pdir&&*pdir)dir=pdir;
- struct stat before,after;need(fstat(fd,&before)==0&&S_ISREG(before.st_mode),"RomFS image stat");
- RomfsProof want=proof_for(&before),saved;
- char path[4096],tmp[4096];need(snprintf(path,sizeof(path),"%s/.romfs-verified-v1",dir)<(int)sizeof(path),"RomFS proof path");
- int force=getenv("TOTK_ROMFS_VERIFY")&&!strcmp(getenv("TOTK_ROMFS_VERIFY"),"full");
- int proof_fd=open(path,O_RDONLY|O_NOFOLLOW);
- if(proof_fd>=0){struct stat ps;int ok=fstat(proof_fd,&ps)==0&&S_ISREG(ps.st_mode)&&ps.st_size==sizeof(saved)&&read(proof_fd,&saved,sizeof(saved))==sizeof(saved);close(proof_fd);
-  if(ok&&!force&&proof_equal(&saved,&want)){fprintf(stderr,"[totk] RomFS unchanged; reused full SHA256 verification record (%llu bytes)\n",(unsigned long long)want.size);runtime_boot_progress(TOTK_UI("游戏资源校验记录有效","Game data verification record is valid"),want.size,want.size);return;}}
- fprintf(stderr,"[totk] verifying local RomFS SHA256 (%llu bytes)%s\n",(unsigned long long)want.size,force?" [forced]":"");
- runtime_boot_progress(TOTK_UI("校验游戏资源","Verifying game data"),0,want.size);sha_fd(fd,ROMFS_IMAGE_SHA256,want.size,TOTK_UI("校验游戏资源","Verifying game data"));
- need(fstat(fd,&after)==0,"RomFS image stat after hash");
- RomfsProof finished=proof_for(&after);need(proof_equal(&want,&finished),"RomFS changed during verification");
- if(snprintf(tmp,sizeof(tmp),"%s/.romfs-verified-v1.%ld.tmp",dir,(long)getpid())>=(int)sizeof(tmp))return;
- int out=open(tmp,O_WRONLY|O_CREAT|O_EXCL,0600);
- if(out>=0){ssize_t n=write(out,&want,sizeof(want));int ok=n==sizeof(want)&&fsync(out)==0;close(out);
-  if(ok){if(rename(tmp,path)!=0)unlink(tmp);}else unlink(tmp);}
+ char path[4096],error[256];need(snprintf(path,sizeof path,"%s/.romfs-verified%s-v1",dir,nchunks?"-parts":"")<(int)sizeof path,"RomFS proof path");
+ RuntimeRomfsVerification in={.fds=nchunks?chunk_fds:&fd,.parts=nchunks?nchunks:1,.size=ROMFS_IMAGE_SIZE,
+  .sha256=ROMFS_IMAGE_SHA256,.proof_path=provided_proof?provided_proof:path,.stage=TOTK_UI("校验游戏资源","Verifying game data"),
+  .flags=provided_proof?RUNTIME_ROMFS_VERIFY_STRICT:0};
+ need(!runtime_romfs_verify(&in,error,sizeof error),error);
 }
 static void sha_range(int fd,uint64_t offset,uint64_t size,const char *expected,const char *what) {
  size_t cap=size<(8u<<20)?(size_t)size:(8u<<20);CC_SHA256_CTX c;CC_SHA256_Init(&c);uint8_t *buffer=malloc(cap?cap:1);need(buffer!=NULL,"hash buffer");
@@ -232,7 +250,7 @@ static void overlay_load(const char *dir,int required,int mods) {
   size_t over=SIZE_MAX;if(mods&&known)for(size_t k=0;k<first;k++)if(overlays[k].index==i&&!strcmp(overlays[k].sha,orig)){over=k;break;}
   Entry e={0};if(known){e=entry(i);if(over==SIZE_MAX){
 #ifdef MNG_RESOURCE_PROVIDER
-   if(runtime_resources_active())resource_original(name,orig);else
+   if(resources_external)resource_original(name,orig);else
 #endif
    sha_range(image_fd,e.offset,e.size,orig,"original");}}else i=ADDED;
   char file[8200];need(snprintf(file,sizeof(file),"%s/%s",dir,name)<(int)sizeof(file),"RomFS overlay file path");int fd=open(file,O_RDONLY|O_CLOEXEC);struct stat st;
@@ -317,6 +335,11 @@ void runtime_fs_init(void) {
  romfs_image_size=runtime_game_number("romfs-config.txt","ROMFS_IMAGE_SIZE");romfs_image_sha256=runtime_game_sha256("romfs-config.txt","ROMFS_IMAGE_SHA256");
  romfs_index_sha256=runtime_game_sha256("romfs-config.txt","ROMFS_INDEX_SHA256");
  const char *dir=getenv("TOTK_ROMFS");if(!dir)dir="extracted/" TOTK_GAME_DIR "/romfs";char path[4096];
+ const char *provided_data=NULL,*provided_proof=NULL;
+#ifdef MNG_RESOURCE_PROVIDER
+ if(resource_mode&&runtime_resource_native("romfs",&dir,&provided_data,&provided_proof))resource_mode=0;
+ resources_external=resource_mode;
+#endif
  need(snprintf(path,sizeof(path),"%s/runtime-index.bin",dir)<(int)sizeof(path),"RomFS path");int fd=open(path,O_RDONLY);need(fd>=0,"RomFS index missing");
  struct stat st;need(fstat(fd,&st)==0&&st.st_size>=24&&st.st_size<128*1024*1024,"RomFS index size");runtime_boot_progress(TOTK_UI("读取资源索引","Reading the data index"),0,0);sha_fd(fd,ROMFS_INDEX_SHA256,0,NULL);
  index_size=(size_t)st.st_size;index_bytes=mmap(NULL,index_size,PROT_READ,MAP_PRIVATE,fd,0);close(fd);need(index_bytes!=MAP_FAILED,"map RomFS index");
@@ -326,14 +349,14 @@ void runtime_fs_init(void) {
  for(uint64_t i=0;i<file_count;i++){Entry e=entry(i);need(e.offset<=ROMFS_IMAGE_SIZE&&e.size<=ROMFS_IMAGE_SIZE-e.offset,"RomFS file bounds");need(e.name<index_size-strings_offset&&e.len>1&&e.len<=index_size-strings_offset-e.name,"RomFS name bounds");const char *name=entry_name(e);need(name[e.len-1]==0&&strlen(name)==e.len-1&&(!previous||strcmp(previous,name)<0),"RomFS sorted paths");previous=name;}
  /* TOTK_ROMFS_DATA: the folder of the image (romfs.bin or its parts) when it is not the index's: the phone keeps the 17 GB in
     Documents/GameData (ios/Sources/main.m), so a new build of the app carries only the index and installs in minutes. */
- const char *data=getenv("TOTK_ROMFS_DATA");if(!data||!*data)data=dir;
+ const char *data=provided_data?provided_data:getenv("TOTK_ROMFS_DATA");if(!data||!*data)data=dir;
 #ifdef MNG_RESOURCE_PROVIDER
  if(resource_mode){need(runtime_resource_volume("romfs"),"No compatible game resource volume");goto resources_ready;}
 #endif
  need(snprintf(path,sizeof(path),"%s/romfs.bin",data)<(int)sizeof(path),"RomFS image path");image_fd=open(path,O_RDONLY);
  if(image_fd<0)open_chunks(data);
  else need(fstat(image_fd,&st)==0&&(uint64_t)st.st_size==ROMFS_IMAGE_SIZE,"RomFS image size");
- verify_image(image_fd,dir);
+ verify_image(image_fd,dir,provided_proof);
  if(!nchunks&&getenv("TOTK_ROMFS_MMAP")&&strcmp(getenv("TOTK_ROMFS_MMAP"),"0")){
   void *mapped=mmap(NULL,(size_t)ROMFS_IMAGE_SIZE,PROT_READ,MAP_PRIVATE,image_fd,0);
   if(mapped!=MAP_FAILED){image_map=mapped;fprintf(stderr,"[totk] RomFS mmap read path enabled\n");}
@@ -374,7 +397,7 @@ unsigned runtime_romfs_open(uint64_t *out,const char *path,int mode) {
    fprintf(stderr,"[totk] RomFS overlay: %s is missing or changed since the start check\n",o->path);runtime_fail("RomFS overlay file changed while the game ran (restart the game)");}}
 #ifdef MNG_RESOURCE_PROVIDER
  RuntimeResourceFile *resource=NULL;
- if(!ov&&runtime_resources_active()){
+ if(!ov&&resources_external){
   char logical[4096];need(snprintf(logical,sizeof logical,"romfs/%s",p)<(int)sizeof logical,"resource path");
   resource=runtime_resource_open(logical);if(!resource){if(errno==ENOENT)return NOT_FOUND;runtime_fail(runtime_resources_error());}
   need(runtime_resource_size(resource)==entry(i).size,"Resource size differs from the backend index");

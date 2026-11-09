@@ -9,6 +9,8 @@ static inline int runtime_resources_init(void);
 static inline int runtime_resources_active(void);
 static inline const char *runtime_resources_error(void);
 static inline int runtime_resource_volume(const char *volume);
+/* A complete native volume may bypass the external file provider. */
+static inline int runtime_resource_native(const char *volume,const char **index_dir,const char **data_dir,const char **proof_path);
 static inline RuntimeResourceFile *runtime_resource_open(const char *path);
 static inline ssize_t runtime_resource_read(RuntimeResourceFile *file,void *buffer,size_t size,uint64_t offset);
 static inline uint64_t runtime_resource_size(const RuntimeResourceFile *file);
