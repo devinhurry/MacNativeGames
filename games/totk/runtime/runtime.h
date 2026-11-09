@@ -58,17 +58,28 @@ void runtime_core_back(int *away);
 void runtime_spin_wait(unsigned module, uint64_t head);   // threads.c: a pass of a gated spin wait (loader.c runtime_dispatch)
 void runtime_save_probe(void);
 int runtime_fs_save_busy(void);   /* runtime/fs_host.c: the game is writing save data (window close waits) */
+/* Optional save-root provider and committed snapshot, enabled by the build. */
+void runtime_prepare_save_root(const char *profile, char *save, size_t size);
+int runtime_fs_clone_committed(const char *dir, const char *to);
 uint8_t *runtime_module_base(const char *name);   /* runtime/loader.c: "main", "subsdk0", "sdk" (probes) */
 uint64_t runtime_module_permission(uint64_t address,uint64_t size,unsigned permission);
 uint64_t runtime_module_lock_permission(uint64_t address,uint64_t size,unsigned mask,unsigned attribute);
 int runtime_module_query(uint64_t address,uint64_t *base,uint64_t *size,unsigned *state,unsigned *permission,unsigned *attribute);
 int runtime_guest_memory_contains(uintptr_t address); /* mapped guest heap, alias, stack or readable module memory */
+void *runtime_external_override(const char *name); /* optional host-provided import override */
 void runtime_oe_push_message(uint32_t message);
 void hle_bind_system_event(void *event, int autoclear);
 uint64_t runtime_svc(unsigned num, uint64_t *regs, const char *module, uint64_t offset);
 void runtime_gate(void);
 void runtime_thread_init(void);
 void runtime_dispatch(uint64_t ret, uint64_t *regs);
+/* Optional runtime extensions, supplied by the application when enabled. */
+void runtime_observation_register(unsigned arg);
+void runtime_observation_dispatch(unsigned arg, uint64_t *regs);
+void runtime_modules_ready(const Module *modules, unsigned count);
+void runtime_guest_checkpoint(void);
+uint64_t runtime_guest_now_ns(void);
+int runtime_external_command(const char *command);
 
 uint64_t runtime_image_bytes(void);
 
@@ -180,6 +191,10 @@ void runtime_gamepad_switch_left(void *controller, int x, int y);
 void runtime_gamepad_switch_right(void *controller, int x, int y);
 void runtime_gamepad_read(RuntimeGamepadState *out);
 void runtime_gamepad_read_sources(RuntimeGamepadState *physical, RuntimeGamepadState *touch); /* keep input origin until merging */
+/* When MNG_INPUT_FILTER is enabled, the application supplies this input policy. */
+void runtime_filter_input(RuntimeGamepadState *combined, const RuntimeGamepadState *physical, const RuntimeGamepadState *touch);
+/* When MNG_GAMEPAD_CAPTURE_OBSERVER is enabled on macOS, called on the main queue. */
+void runtime_gamepad_capture_changed(int on);
 extern int (*runtime_vr_pad)(int plain, uint64_t *buttons, int32_t *lx, int32_t *ly, int32_t *rx, int32_t *ry);   /* zeldaVR: set by gfx/nvn/totk_vr.m while VR runs (the Quest 3 controllers) */
 /* Mac software keyboard: exclusive controller capture; UI reads physical positions (controller_map.h),
    independent of gameplay remaps. Main-thread only. Closing waits for release before gameplay resumes. */

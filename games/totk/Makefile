@@ -1,6 +1,3 @@
-# TouchNX supplies selected game hooks from an external checkout.
-TOUCHNX_ROOT ?= $(abspath ../../../touchnx)
-
 GFX_SRC := $(wildcard third_party/d2r_gfx/gfx/nvn/*.c third_party/d2r_gfx/gfx/nvn/*.m third_party/d2r_gfx/gfx/nvn/*.S third_party/d2r_gfx/gfx/tex/*.c third_party/d2r_gfx/gfx/tex/*.m) \
            $(wildcard zeldaVR/gfx/*.c zeldaVR/gfx/*.m)   # zeldaVR: the VR modules (off unless TOTK_VR_CONTROL is set)
 GFX_OBJECTS := $(addprefix build/gfx/,$(addsuffix .o,$(GFX_SRC)))
@@ -468,8 +465,9 @@ binary-botw160: build/totk-native-botw160 build/pso_manifest.tsv build/pso_title
 runtime-botw160: binary-botw160 game-data-botw160
 # Breath of the Wild 1.9.0 (docs/botw-v1.9.0-port.md): the same runtime, and the graphics objects compiled with GAME_BOTW190
 # as well (build/gfx-botw190; the NVN version it reports differs from 1.6.0's).
-ifeq ($(TOUCHNX_INTEGRATION),1)
-include $(TOUCHNX_MNG_MAKEFILE)
+SAVE_BACKEND_SOURCE ?= runtime/cloud_save.m
+ifneq ($(MNG_BUILD_OPTIONS),)
+include $(MNG_BUILD_OPTIONS)
 endif
 
 GFX_OBJECTS_BOTW190 := $(addprefix build/gfx-botw190$(BOTW190_SUFFIX)/,$(addsuffix .o,$(GFX_SRC)))
@@ -481,8 +479,8 @@ build/gfx-botw190$(BOTW190_SUFFIX)/%.o: % $(GFX_HEADERS) Makefile $(BOTW190_INPU
 build/game-data/botw190/aoc-config.txt: scripts/prepare_romfs_backend.py $(wildcard extracted/botw190/aoc/*/index.json)
 	"$(PY)" scripts/prepare_romfs_backend.py --version botw190 --aoc
 game-data-botw190: build/game-data/botw190/aoc-config.txt
-build/totk-native-botw190$(BOTW190_SUFFIX): $(wildcard runtime/*.[ch] runtime/*.m runtime/*.S) $(GFX_OBJECTS_BOTW190) $(BOTW_TOUCH_OBJECTS) Makefile runtime/game_info.plist app/launcher.m runtime/cloud_save.m $(BOTW190_LAUNCHER)
-	xcrun clang -std=c11 $(NATIVE_OPT) $(GAME_INFO) -g -Wall -Wextra -Werror -Wno-deprecated-declarations -Ithird_party/d2r_gfx/gfx/nvn/include -DGAME_BOTW=1 -DGAME_BOTW190=1 $(BOTW190_FLAGS) -Ibuild -I/opt/homebrew/opt/opus/include/opus -I/opt/homebrew/opt/libvpx/include runtime/loader.c runtime/game_data.c runtime/game_patches_botw.c runtime/aoc_romfs.c runtime/settings_service.c runtime/world_survey.c runtime/game_slot.c runtime/services.c runtime/romfs.c runtime/threads.c runtime/gate.S runtime/hle_stack.S runtime/hle_stack.c runtime/thread_enter.S runtime/gfx_bridge.c runtime/frontend.m runtime/account.c runtime/input.c runtime/hid_feedback.c runtime/motion_fusion.c runtime/autoload.c runtime/gamepad.m runtime/gamepad_feedback.m runtime/gfx_probe.c runtime/vpool_probe.m runtime/gpu_path_probe.m runtime/memory_probe.c runtime/shared_font.c runtime/ipc.c runtime/audio_renderer.c runtime/audio_mixer.c runtime/audio_reverb.c runtime/audio_effects.c runtime/fs_host.c runtime/opus_codec.c runtime/movie_host.c runtime/time_host.c runtime/applet_host.c runtime/swkbd_host.c app/launcher.m runtime/cloud_save.m $(GFX_OBJECTS_BOTW190) $(BOTW_TOUCH_OBJECTS) $(BOTW190_LINK) /opt/homebrew/opt/opus/lib/libopus.a /opt/homebrew/opt/libvpx/lib/libvpx.a -framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework CoreText -framework UniformTypeIdentifiers -fobjc-arc -framework Cocoa -framework CoreVideo -framework CoreFoundation -framework AudioToolbox -framework GameController -framework CoreHaptics -framework IOKit -framework IOSurface -o "$@"
+build/totk-native-botw190$(BOTW190_SUFFIX): $(wildcard runtime/*.[ch] runtime/*.m runtime/*.S) $(GFX_OBJECTS_BOTW190) $(BOTW190_EXTRA_OBJECTS) Makefile runtime/game_info.plist app/launcher.m $(SAVE_BACKEND_SOURCE) $(BOTW190_LAUNCHER)
+	xcrun clang -std=c11 $(NATIVE_OPT) $(GAME_INFO) -g -Wall -Wextra -Werror -Wno-deprecated-declarations -Ithird_party/d2r_gfx/gfx/nvn/include -DGAME_BOTW=1 -DGAME_BOTW190=1 $(BOTW190_FLAGS) -Ibuild -I/opt/homebrew/opt/opus/include/opus -I/opt/homebrew/opt/libvpx/include runtime/loader.c runtime/game_data.c runtime/game_patches_botw.c runtime/aoc_romfs.c runtime/settings_service.c runtime/world_survey.c runtime/game_slot.c runtime/services.c runtime/romfs.c runtime/threads.c runtime/gate.S runtime/hle_stack.S runtime/hle_stack.c runtime/thread_enter.S runtime/gfx_bridge.c runtime/frontend.m runtime/account.c runtime/input.c runtime/hid_feedback.c runtime/motion_fusion.c runtime/autoload.c runtime/gamepad.m runtime/gamepad_feedback.m runtime/gfx_probe.c runtime/vpool_probe.m runtime/gpu_path_probe.m runtime/memory_probe.c runtime/shared_font.c runtime/ipc.c runtime/audio_renderer.c runtime/audio_mixer.c runtime/audio_reverb.c runtime/audio_effects.c runtime/fs_host.c runtime/opus_codec.c runtime/movie_host.c runtime/time_host.c runtime/applet_host.c runtime/swkbd_host.c app/launcher.m $(SAVE_BACKEND_SOURCE) $(GFX_OBJECTS_BOTW190) $(BOTW190_EXTRA_OBJECTS) $(BOTW190_LINK) /opt/homebrew/opt/opus/lib/libopus.a /opt/homebrew/opt/libvpx/lib/libvpx.a -framework Metal -framework MetalFX -framework Foundation -framework QuartzCore -framework ImageIO -framework CoreGraphics -framework CoreText -framework UniformTypeIdentifiers -fobjc-arc -framework Cocoa -framework CoreVideo -framework CoreFoundation -framework AudioToolbox -framework GameController -framework CoreHaptics -framework IOKit -framework IOSurface -o "$@"
 runtime-botw190 binary-botw190: SHADER_LIST ?= ../botw/assets/shader_list.tsv
 binary-botw190: build/totk-native-botw190$(BOTW190_SUFFIX) build/pso_manifest.tsv build/pso_title.tsv
 runtime-botw190: binary-botw190 game-data-botw190
@@ -539,7 +537,7 @@ probe-playtime:
 # The build and launch-time mod readers share ranges derived from the actual runtime sources.
 runtime/botw_pchtxt_sites.h: scripts/emit_botw_pchtxt_sites.py scripts/patch_sites.py runtime/game_patches_botw.c runtime/game_version.h runtime/botw_shadow_res.h runtime/botw_fov.h runtime/botw_stereo.h runtime/botw_vr_camera.h runtime/botw_vr_projection.h runtime/botw_vr_ui_profile.h
 	"$(PY)" scripts/emit_botw_pchtxt_sites.py --out "$@"
-build/totk-native-botw160 build/totk-native-botw190 build/totk-native-botw190-touchnx: runtime/botw_pchtxt_sites.h
+build/totk-native-botw160 build/totk-native-botw190$(BOTW190_SUFFIX): runtime/botw_pchtxt_sites.h
 
 # The TotK adapter has per-game VR metadata and fixed stream/render controls.
 build/gfx-v143/zeldaVR/gfx/totk_vr.m.o: zeldaVR/gfx/totk_vr.m $(GFX_HEADERS) Makefile

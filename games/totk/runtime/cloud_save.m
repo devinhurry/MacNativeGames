@@ -1,6 +1,3 @@
-#ifdef TOUCHNX_INTEGRATION
-#include <runtime/save_bridge.inc>
-#else
 /* Save sync through a folder the player chooses: the same save on the Mac and on iPhone / iPad.
 
    The game's save folder (<profile>/save/<uid>, runtime/fs_host.c) stays the working copy. A copy of it lives in the sync
@@ -355,5 +352,3 @@ void runtime_cloud_save_changed(void) {
     if (!g_queue || __atomic_exchange_n(&g_push_pending, 1, __ATOMIC_SEQ_CST)) return;
     push_when_quiet();
 }
-
-#endif

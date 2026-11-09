@@ -18,10 +18,9 @@
 #include <stdatomic.h>
 #include <sys/stat.h>
 #include <unistd.h>
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_COMMITTED_SAVE_SNAPSHOT
 #include <sys/clonefile.h>
 #include <copyfile.h>
-#include <runtime/bridge.h>
 #endif
 
 #define R_PATH_NOT_FOUND 0x202u
@@ -62,11 +61,11 @@ static void need(int c, const char *m) { if (!c) runtime_fail(m); }
    writes a slot's files back to back and then commits; between the files nothing is open for a moment). */
 static _Atomic int save_writers, save_dirty;
 static _Atomic uint64_t save_changed_ns;
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_COMMITTED_SAVE_SNAPSHOT
 static _Atomic uint64_t save_generation;
 #endif
 static void save_touched(void) {
-#ifdef TOUCHNX_INTEGRATION
+#ifdef MNG_COMMITTED_SAVE_SNAPSHOT
     atomic_fetch_add(&save_generation,1);
 #endif
     atomic_store(&save_changed_ns, runtime_now_ns()); atomic_store(&save_dirty, 1);
@@ -98,8 +97,8 @@ static void init(void) {
     char p[1100]; make_dir(profile);
     snprintf(p, sizeof p, "%s/save", profile); make_dir(p);
     need(snprintf(save_root, sizeof save_root, "%s/save/%016llx%016llx", profile, (unsigned long long)uid[1], (unsigned long long)uid[0]) < (int)sizeof save_root, "save path");
-#ifdef TOUCHNX_INTEGRATION
-    tnx_mng_prepare_save(profile,save_root,sizeof save_root);
+#ifdef MNG_SAVE_ROOT_PROVIDER
+    runtime_prepare_save_root(profile,save_root,sizeof save_root);
 #endif
     make_dir(save_root);                                   /* launcher-style EnsureSaveData */
     snprintf(p, sizeof p, "%s/temp", profile); remove_tree(p); make_dir(p);
@@ -108,8 +107,21 @@ static void init(void) {
     runtime_cloud_save_start(save_root, profile);   /* the sync folder's copy, when it is newer, before the game reads a save */
 }
 static void ready(void) { pthread_once(&once, init); }
-#ifdef TOUCHNX_INTEGRATION
-#include <adapters/macnativegames/runtime/save_snapshot.inc>
+#ifdef MNG_COMMITTED_SAVE_SNAPSHOT
+/* Files are written directly by this runtime. Clone only while no save has
+   uncommitted changes, and reject any snapshot crossed by a new mutation. */
+int runtime_fs_clone_committed(const char *dir,const char *to) {
+    int active=*save_root && !strcmp(dir,save_root);
+    uint64_t generation=atomic_load(&save_generation);
+    if(active && (atomic_load(&save_writers) || atomic_load(&save_dirty))){errno=EBUSY;return -1;}
+    int copied=clonefile(dir,to,0);
+    if(copied && (errno==ENOTSUP || errno==EXDEV))copied=copyfile(dir,to,NULL,COPYFILE_ALL|COPYFILE_RECURSIVE);
+    if(copied)return -1;
+    if(active && (atomic_load(&save_writers) || atomic_load(&save_dirty) || atomic_load(&save_generation)!=generation)) {
+        remove_tree(to);errno=EBUSY;return -1;
+    }
+    return 0;
+}
 #endif
 
 /* ---------- mounts and paths ---------- */

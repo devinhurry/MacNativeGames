@@ -192,7 +192,7 @@ class Extraction(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             profile = Path(folder) / 'profile.py'
             profile.write_text("def sites(build_id):\n    return [(0x1234, 42, '11223344', 'test')] if build_id == 'cd' * 16 else []\n")
-            with patch.dict(os.environ, {'TOUCHNX_REWRITE_PROFILE': str(profile)}):
+            with patch.dict(os.environ, {'MNG_REWRITE_PROFILE': str(profile)}):
                 sites = patch_sites.rewriter_sites('cd' * 16)
                 self.assertIn(patch_sites.Site('external OBS', 0x1234, 4), sites)
                 self.assertEqual(patch_sites.rewriter_sites('ef' * 16), [])

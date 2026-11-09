@@ -1,7 +1,4 @@
 #import "touch_pad.h"
-#if defined(TOUCHNX_INTEGRATION)
-#include <ios/touch_pad.inc>
-#else
 #import "device_motion.h"
 #import <GameController/GameController.h>
 #include <math.h>
@@ -255,4 +252,3 @@ static void draw_stick(CGContextRef c, CGPoint o, CGPoint p, CGFloat r) {
     CGSize z = [rate sizeWithAttributes:small]; [rate drawAtPoint:CGPointMake(f.x - z.width / 2, f.y - z.height / 2) withAttributes:small];
 }
 @end
-#endif

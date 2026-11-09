@@ -160,10 +160,11 @@ def main():
     if not shutil.which('xcodegen'): raise RuntimeError('install xcodegen: brew install xcodegen')
     gen.mkdir(parents=True,exist_ok=True)
     botw=a.version.startswith('botw')
-    integration = runpy.run_path(os.environ['TOUCHNX_MNG_IOS_PROJECT']) if os.environ.get('TOUCHNX_INTEGRATION')=='1' else None
+    profile_path = os.environ.get('MNG_BUILD_PROFILE')
+    integration = runpy.run_path(profile_path) if profile_path else None
     three_packages=bool(integration and integration.get('EXTERNAL_PACKAGES'))
     if (a.reuse_graphics or a.skip_romfs_package) and not three_packages:
-        raise RuntimeError('resource-package reuse requires the TouchNX integration')
+        raise RuntimeError('resource-package reuse requires an external package profile')
     if three_packages:
         integration['validate_reuse'](tree,a.reuse_graphics,a.skip_romfs_package,sdk_name)
     ns2=a.version in ('dkb','pkp')
@@ -172,7 +173,7 @@ def main():
     if not (game_data/'runtime-tables.bin').is_file(): raise RuntimeError(f'missing game data: {game_data} (make game-data-{a.version})')
     # Export the final code after all verified runtime patches have been applied, then embed it in executable segments.
     host=tree/('build/totk-native' if a.version=='v0' else f'build/totk-native-{a.version}')
-    if os.environ.get('TOUCHNX_INTEGRATION')=='1': host=host.with_name(host.name+'-touchnx')
+    if integration: host=host.with_name(host.name+integration.get('HOST_SUFFIX',''))
     rewritten=tree/f'rewritten/{a.version}'; modules=gen/'modules';modules.mkdir(exist_ok=True)
     # The Settings pane chooses the scene size at launch, but the size patch is code the phone cannot write: export
     # with one valid size so the patch is embedded, then the device's own TOTK_RENDER_RES (main.m from the pane) drives
@@ -183,8 +184,6 @@ def main():
     flags=subprocess.check_output([sys.executable,ios/'tools/gen_embed.py',rewritten,gen/'embed.S','--text-dir',modules,*names],text=True,env=env).strip()
     # The app's sources use version-specific patch and generated runtime tables.
     project=project_for_platform((ios/'project.yml').read_text(),a.platform)
-    if integration and not ns2:   # Match the native Mac source list for the integration build.
-        project=project.replace('          - loader.c','          - loader.c\n          - offline_host.c',1)
     # The Settings pane, copied so it can be changed for the game and given its languages (settings_strings.py: one language,
     # the device's, instead of every row in Chinese and English).
     settings=gen/'Settings.bundle'; shutil.rmtree(settings,ignore_errors=True); shutil.copytree(ios/'Settings.bundle',settings)
@@ -203,16 +202,10 @@ def main():
         (settings/'Root.plist').write_bytes(plistlib.dumps(root))
     elif a.version=='v143': project=project.replace('          - loader.c','          - loader.c\n          - game_patches.c')
     else: project=project.replace('          - loader.c','          - loader.c\n          - game_patches_v143.c')
-    if os.environ.get('TOUCHNX_INTEGRATION')=='1':
-        touchnx=Path(os.environ.get('TOUCHNX_ROOT', tree.parents[2]/'touchnx')).resolve()
-        if not (touchnx/'include/module.modulemap').is_file(): raise SystemExit(f'TouchNX checkout not found: {touchnx}; set TOUCHNX_ROOT')
-        run([sys.executable,touchnx/'tools/generate_present.py'],tree,logs/'touchnx-present-source.log',env)
-        project=integration['add_sources'](project,touchnx)
-
     settings_strings.localize(settings)   # after the game's own changes to the pane
     if not botw and not ns2 and a.version!='v0': project=project.replace('-I../build\n','-I../build -DTOTK_GAME_'+a.version.upper()+'=1\n')
-    if os.environ.get('TOUCHNX_INTEGRATION')=='1':
-        project=integration['add_flags'](project,touchnx,tree,ios)
+    if integration:
+        project=integration['configure_project'](project,tree,ios,logs,env,run)
     project=configure_app_icon(tree,gen,project,logs,env,vision)
     (ios/'project.generated.yml').write_text(project)
     # Build device dependencies separately: Homebrew's Mac archives cannot be linked into an iOS application.
@@ -280,8 +273,8 @@ def main():
     dest=out if out.suffix=='.app' else tree/'build/ios-payload/Payload/TOTK.app'
     discard(dest,beside=dest.parent.parent if out.suffix!='.app' else None)   # not in Payload, which is zipped whole
     copy_tree(app,dest)
-    if os.environ.get('TOUCHNX_INTEGRATION')=='1': run([sys.executable,os.environ['TOUCHNX_RESOURCE_STAGER'],'--game',os.environ['TOUCHNX_GAME'],'--platform','ios','--bundle',dest,
-                                '--romfs',tree/f'extracted/{a.version}/romfs'],tree,logs/'touchnx-ui-resources.log',env)
+    if integration:
+        integration['stage_resources'](tree,dest,a.version,logs,env,run)
     res=dest/'GameData';res.mkdir(exist_ok=True)
     copy_tree(game_data,res/'game-data')   # TOTK_GAME_DATA (Sources/main.m)
     romfs=tree/f'extracted/{a.version}/romfs'

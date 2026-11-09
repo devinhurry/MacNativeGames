@@ -62,8 +62,8 @@ _runtime_gate:
     str x9, [sp, #776]
     mrs x9, fpcr
     str x9, [sp, #784]
-#ifdef TOUCHNX_INTEGRATION
-    // nxnative touch callbacks read regs[99]: the rewriter's saved x29/x30, before its original instruction.
+#ifdef MNG_GUEST_OBSERVATION
+    // Observation callbacks read regs[99]: the rewriter's saved x29/x30, before its original instruction.
     // The extra 16 bytes at the saved guest SP belong to this gate's x16/x17 save slot.
     ldr x9, [sp, #800]
     add x9, x9, #16

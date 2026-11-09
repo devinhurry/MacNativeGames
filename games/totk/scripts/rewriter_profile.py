@@ -6,7 +6,7 @@ import runpy
 
 
 def load():
-    path = os.environ.get('TOUCHNX_REWRITE_PROFILE')
+    path = os.environ.get('MNG_REWRITE_PROFILE')
     return runpy.run_path(str(Path(path).resolve())) if path else None
 
 
