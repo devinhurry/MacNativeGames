@@ -5,7 +5,9 @@ from pathlib import Path
 import runpy
 
 
-def load():
+def load(version=None):
+    if version is not None and os.environ.get('MNG_SELECTED_VERSION', version) != version:
+        return None
     path = os.environ.get('MNG_REWRITE_PROFILE')
     return runpy.run_path(str(Path(path).resolve())) if path else None
 

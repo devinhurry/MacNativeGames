@@ -637,7 +637,12 @@ def merge_mod_exefs(tree, mod, version, logs):
 
 
 def step_code(tree, game, keys, env, logs, *, version="v0", mod=None):
-    expected = VERSIONS[version]
+    expected = dict(VERSIONS[version])
+    profile = rewriter_profile.load(version)
+    expected['rewritten_sha256'] = rewriter_profile.expected_rewritten(expected['rewritten_sha256'], version, profile)
+    env = dict(env)
+    if not profile:
+        env.pop('MNG_REWRITE_PROFILE', None)
     update_args = [] if version == "v0" else ["--update"]
     py = tree / '.venv/bin/python'
     exefs = tree / f'extracted/{version}/exefs'
@@ -2854,6 +2859,8 @@ def main(argv):
             f'<folder>.backup-<date>-<time>, not deleted. Without the flag the build leaves the folder alone.')
     if update:
         version, update = identify_update(tree, update, keys, logs)
+    if os.environ.get('MNG_SELECTED_VERSION') and os.environ['MNG_SELECTED_VERSION'] != version:
+        raise BuildError(f'Selected version {os.environ["MNG_SELECTED_VERSION"]}, but the input is {version}')
     if args.native_4k and (args.platform != 'macos' or version not in ('v143', 'v121')):
         raise BuildError('--native-4k needs 1.2.1 or the 1.4.3 update and a Mac build (the other versions and iPhone / iPad have no 4K output)')
     if args.native_5k and (args.platform != 'macos' or version != 'v143'):
@@ -2884,7 +2891,8 @@ def main(argv):
         step_update_data(tree, game, update, keys, logs, version=version, mod=mod, native_4k=native_4k, native_5k=native_5k, vr=args.vr)
     if mod:
         check_mod_overlays(tree, mod, version)
-    step_shaders(tree, logs, version=version)
+    if not profile.get('prepare_shader_seed') or profile['prepare_shader_seed'](args):
+        step_shaders(tree, logs, version=version)
     if not device_app:   # the Mac app's metallibs; build_ipa.py compiles the device's own
         step_shader_libs(tree, logs, version=version)
     step_binary(tree, game, keys, env, logs, version=version)
@@ -2892,8 +2900,9 @@ def main(argv):
     if device_app:
         if args.platform == 'ios':   # visionOS keeps the startup shaders only
             build_device_translator(tree, logs)
-        run([py, 'ios/tools/build_ipa.py', '--tree', tree, '--out', out, '--version', version,
-             '--logs', logs, '--app-name', IOS_APP_NAME, '--bundle-id', BUNDLE_ID, '--platform', args.platform,
+        run([py, profile.get('IOS_BUILDER', 'ios/tools/build_ipa.py'), '--tree', tree, '--out', out, '--version', version,
+             '--logs', logs, '--app-name', APPS[which][2], '--bundle-id', APPS[which][1], '--platform', args.platform,
+             *(profile['ios_arguments'](args) if profile.get('ios_arguments') else []),
              *(['--image-outside'] if args.ios_game_data == 'documents' else []),
              *[x for g in args.device_gpu or [] for x in ('--device-gpu', g)]], logs/'build-ipa.log', cwd=tree, env=env)
         say_device_pipelines(logs)
