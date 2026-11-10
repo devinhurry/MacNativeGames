@@ -3,6 +3,20 @@
 #ifdef __OBJC__
 #import <Foundation/Foundation.h>
 #include <stdint.h>
+/* Optional read-only shader resources. The provider supplies compatible
+   readers; without it these names are the original Foundation receivers. */
+#ifdef MNG_SHADER_RESOURCE_PROVIDER
+#include MNG_SHADER_RESOURCE_PROVIDER
+#endif
+#ifndef MNG_SHADER_DATA
+#define MNG_SHADER_DATA NSData
+#endif
+#ifndef MNG_SHADER_TEXT
+#define MNG_SHADER_TEXT NSString
+#endif
+#ifndef MNG_SHADER_FILES
+#define MNG_SHADER_FILES NSFileManager.defaultManager
+#endif
 NSString *totk_rt_dir(void);
 // A file of the translation cache by name: the cache folder, or on iOS the seed inside the app for the files it brings
 // (read in place, never copied). totk_rt_list: every file name of both, sorted.
