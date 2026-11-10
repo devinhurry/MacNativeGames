@@ -298,7 +298,7 @@ NSArray<NSString *> *totk_rt_list(void) {
 static NSString *index_path(NSString *shader) { return [totk_rt_dir() stringByAppendingFormat:@"/%@.variants", shader]; }
 static NSMutableArray *variants_of(NSString *shader);
 static NSArray *variants_file(NSString *path) {
-    NSData *d = [NSData dataWithContentsOfFile:path];
+    NSData *d = [MNG_SHADER_DATA dataWithContentsOfFile:path];
     NSArray *a = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
     return [a isKindOfClass:[NSArray class]] ? a : @[];
 }
@@ -354,7 +354,7 @@ static NSString *variant_lookup(NSString *shader, NSDictionary *answers) {
         if (!g_msl_checked) g_msl_checked = [NSMutableSet set];
         BOOL checked = [g_msl_checked containsObject:found];
         NSString *msl = checked ? nil :
-            [NSString stringWithContentsOfFile:totk_rt_file([found stringByAppendingString:@"_b.metal"])
+            [MNG_SHADER_TEXT stringWithContentsOfFile:totk_rt_file([found stringByAppendingString:@"_b.metal"])
                                              encoding:NSUTF8StringEncoding error:nil];
         /* missing, empty (a translation cut short: 0 bytes, 2026-10-30) or previously un-compilable: translated again */
         if (!checked && (!msl || msl.length < 64 || [msl containsString:@"double "] || [msl containsString:@"unsupported_GLSLstd450"])) {
