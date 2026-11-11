@@ -3926,10 +3926,13 @@ static void up_begin(void) {
     if (!g_up_texs) g_up_texs = [NSMutableArray array];
     if (!g_up_keep) g_up_keep = [NSMutableArray array];
 }
-static void up_reserve(size_t n) {
+static void up_prepare(size_t n) {
     if (g_up_batch_bytes && n > g_up_batch_limit - MIN(g_up_batch_bytes, g_up_batch_limit)) {
         up_flush(); up_begin();
     }
+}
+static void up_reserve(size_t n) {
+    up_prepare(n);
     g_up_batch_bytes += n;
 }
 
@@ -3950,10 +3953,10 @@ static void up_diag(void) {
     MLOG("上传暂存块%s：累计新建 %llu 块、其中一批内换块 %llu 次（换下的旧块共 %llu MB）；换下的旧块此刻还活着 %lu 块 %llu MB、仍在驻留集 %lu 块；显卡已分配 %llu MB、驻留集 %lu 个对象、延迟释放队列 %lu", fol && !chg ? "（落定后）" : "",
          (unsigned long long)g_up_blocks_new, (unsigned long long)g_up_swaps, (unsigned long long)(g_up_swap_bytes >> 20), alive, (unsigned long long)(abytes >> 20), inres, (unsigned long long)(g_dev.currentAllocatedSize >> 20), nres, ndef);
 }
-static id<MTLBuffer> up_alloc(size_t n, size_t *off) {
+static id<MTLBuffer> up_alloc_block(size_t n, size_t *off) {
     size_t need = (n + 255u) & ~((size_t)255u);
     if (!g_up_block || g_up_block_off + need > g_up_block_size) {
-        up_reserve(n > UP_BLOCK_SIZE ? need : UP_BLOCK_SIZE);
+        g_up_batch_bytes += n > UP_BLOCK_SIZE ? need : UP_BLOCK_SIZE;
         // 换块：旧块还被这一批已经登记的拷贝 / 解压命令引用着，不能当场放；交给 g_up_keep，在本批上传完成时撤出驻留集并释放。
         // 原先这里直接把 g_up_block 换成新块：旧块没人退役、却一直留在驻留集里，一批上传每多换一次块就漏掉一块（通常 32 MB）显卡内存。
         // 旧块与冲刷时退役的「当前块」是两个对象，不会重复退役
@@ -3976,6 +3979,27 @@ static id<MTLBuffer> up_alloc(size_t n, size_t *off) {
     g_up_block_off += need;
     return g_up_block;
 }
+
+/* Reserve both sides of a texture before either allocation. Flushing between them
+   retires the deswizzle source in the preceding batch while the transcode job is
+   queued in the next one (Metal 4 does not retain the job's resource pointers). */
+static id<MTLBuffer> up_alloc_pair(size_t n, size_t *off, size_t other_n,
+                                  __strong id<MTLBuffer> *other, size_t *other_off) {
+    size_t used = g_up_block_off, size = g_up_block_size, charge = 0;
+    size_t requests[] = {n, other_n};
+    for (int i = 0; i < 2; i++) if (requests[i]) {
+        size_t need = (requests[i] + 255u) & ~(size_t)255u;
+        if (!size || need > size - used) {
+            size = MAX(need, (size_t)UP_BLOCK_SIZE); used = 0; charge += size;
+        }
+        used += need;
+    }
+    up_prepare(charge);
+    id<MTLBuffer> first = up_alloc_block(n, off);
+    if (other_n) *other = up_alloc_block(other_n, other_off);
+    return first;
+}
+static id<MTLBuffer> up_alloc(size_t n, size_t *off) { return up_alloc_pair(n, off, 0, NULL, NULL); }
 
 // 解排布参数块：64 字节一格，从 64 KB 共享存储块里顺序切；块满换新，旧块按栅栏延迟释放
 // Deswizzle parameter blocks: 64 bytes per cell, cut sequentially from a 64 KB shared-storage block; a full block is replaced by a new one, and the old block is released lazily by fence
@@ -4231,8 +4255,9 @@ static id<MTLTexture> pkg_upload_(const tex_t *t, uint64_t *stamp, reup_key *key
         // The GPU reads the memory pool at execution time, which is closer to a real Switch than a snapshot at CPU upload time; the dirty-page stamp is still taken before encoding, and later writes still trigger a re-upload.
         up_begin();
         size_t stg_off;
-        id<MTLBuffer> stg = up_alloc(gdec ? ctotal : total ? total : 16, &stg_off);
-        size_t ast_off = 0, aoff = 0; id<MTLBuffer> ast = gtca ? up_alloc(atotal ? atotal : 16, &ast_off) : tck ? up_alloc(xtotal ? xtotal : 16, &ast_off) : nil;   // a block switch keeps the earlier block alive (g_up_keep)
+        size_t ast_off = 0, aoff = 0; id<MTLBuffer> ast = nil;
+        size_t ast_size = gtca ? (atotal ? atotal : 16) : tck ? (xtotal ? xtotal : 16) : 0;
+        id<MTLBuffer> stg = up_alloc_pair(gdec ? ctotal : total ? total : 16, &stg_off, ast_size, &ast, &ast_off);
         size_t off = 0; int enc_ok = g_up_ce != nil, nb0 = g_nup_blits, nd0 = g_nup_decs, nt0 = g_nup_tcas, nx0 = g_nup_tcxs;
         for (unsigned l = drop; enc_ok && l < d.mipmapLevelCount + drop; l++) {
             uint32_t w = MAX(t->d.width >> l, 1u), h = MAX(t->d.height >> l, 1u), z = t->d.target == 2 ? MAX(t->d.depth >> l, 1u) : 1;
@@ -18841,6 +18866,25 @@ int mtl_probe_upload_batch(void) {
         if (actual != want) MDIE("upload batch probe: texture %d channel %d: %u != %u", i, c, actual, want);
         checked++;
     }
+    /* A streaming texture needs both deswizzle input and transcode output. The input
+       fits the last block of a full batch; allocating its output must not retire it. */
+    mtl_sub_begin(); up_begin();
+    size_t pad, input_off, output_off;
+    up_alloc(UP_BLOCK_SIZE, &pad); up_alloc(UP_BLOCK_SIZE / 2, &pad);
+    id<MTLBuffer> output = nil;
+    id<MTLBuffer> input = up_alloc_pair(UP_BLOCK_SIZE / 2, &input_off, UP_BLOCK_SIZE, &output, &output_off);
+    int owned = input == g_up_block || [g_up_keep containsObject:input];
+    for (int i = 0; i < g_up_pool_n; i++) if ((g_up_batch_pool >> i & 1) && g_up_pool[i] == input) owned = 1;
+    if (!owned || input == output) MDIE("upload batch probe: staging input is not owned by its output's batch");
+    enc_b_copy_buffer(g_up_ce, src, 0, input, input_off, 4);
+    [g_up_ce barrierAfterEncoderStages:MTLStageBlit beforeEncoderStages:MTLStageBlit visibilityOptions:MTL4VisibilityOptionDevice];
+    enc_b_copy_buffer(g_up_ce, input, input_off, output, output_off, 4);
+    up_blit_add(output, output_off, 4, 4, MTLSizeMake(1, 1, 1), dst[0], 0, 0); [g_up_texs addObject:dst[0]];
+    up_flush();
+    enc_b_copy_texture_buffer(blit(), dst[0], 0, 0, MTLOriginMake(0, 0, 0), MTLSizeMake(1, 1, 1), result, 0, 256, 256);
+    mtl_sub_commit(); mtl_finish();
+    for (int c = 0; c < 4; c++) if (((uint8_t *)result.contents)[c] != c) MDIE("upload batch probe: staging pair payload mismatch");
+    checked += 5;
     for (int i = 0; i < N; i++) res_remove(dst[i]); res_remove(src); res_remove(result);
     return checked;
 }
